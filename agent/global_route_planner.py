@@ -13,6 +13,7 @@ import numpy as np
 import networkx as nx
 
 import carla
+import lib.frenet_optimal_trajectory_planner.FrenetOptimalTrajectory.fot_wrapper as fot
 from agent.local_planner import RoadOption
 from agent.misc import vector
 
@@ -44,6 +45,42 @@ class GlobalRoutePlanner(object):
         from origin to destination
         """
         route_trace = []
+        initial_conditions = {
+            'ps': 0,
+            'target_speed': 20,
+            'pos': np.array([origin.x, origin.y]),
+            'vel': np.array([0, 0]),
+            'wp': np.array([[origin.x, origin.y], [destination.x, destination.y]]),
+            'obs': np.array([])
+        }
+        hyperparameters = {
+            "max_speed": 25.0,
+            "max_accel": 15.0,
+            "max_curvature": 15.0,
+            "max_road_width_l": 5.0,
+            "max_road_width_r": 5.0,
+            "d_road_w": 0.5,
+            "dt": 0.2,
+            "maxt": 5.0,
+            "mint": 2.0,
+            "d_t_s": 0.5,
+            "n_s_sample": 2.0,
+            "obstacle_clearance": 0.1,
+            "kd": 1.0,
+            "kv": 0.1,
+            "ka": 0.1,
+            "kj": 0.1,
+            "kt": 0.1,
+            "ko": 0.1,
+            "klat": 1.0,
+            "klon": 1.0,
+            "num_threads": 0,
+        }
+        result_x, result_y, speeds, ix, iy, iyaw, d, s, speeds_x, \
+            speeds_y, misc, costs, success = fot.run_fot(initial_conditions, hyperparameters)
+        print(result_x)
+        print(result_y)
+        assert False
         route = self._path_search(origin, destination)
         current_waypoint = self._wmap.get_waypoint(origin)
         destination_waypoint = self._wmap.get_waypoint(destination)
@@ -299,6 +336,7 @@ class GlobalRoutePlanner(object):
             self._graph, source=start[0], target=end[0],
             heuristic=self._distance_heuristic, weight='length')
         route.append(end[1])
+        print(route)
         return route
 
     def _successive_last_intersection_edge(self, index, route):

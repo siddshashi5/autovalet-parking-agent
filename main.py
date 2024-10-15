@@ -11,11 +11,6 @@ import weakref
 import numpy as np
 import numpy.random as random
 
-import pygame
-from pygame.locals import KMOD_CTRL
-from pygame.locals import K_ESCAPE
-from pygame.locals import K_q
-
 import carla
 from carla import ColorConverter as cc
 
@@ -233,7 +228,7 @@ class CameraManager(object):
     def __init__(self, parent_actor):
         """Constructor method"""
         self.sensor = None
-        self.surface = None
+        # self.surface = None
         self._parent = parent_actor
         self.recording = False
         bound_x = 0.5 + self._parent.bounding_box.extent.x
@@ -282,7 +277,7 @@ class CameraManager(object):
         if needs_respawn:
             if self.sensor is not None:
                 self.sensor.destroy()
-                self.surface = None
+                # self.surface = None
             self.sensor = self._parent.get_world().spawn_actor(
                 self.sensors[index][-1],
                 self._camera_transforms[self.transform_index][0],
@@ -321,14 +316,14 @@ class CameraManager(object):
             lidar_img_size = (self.hud.dim[0], self.hud.dim[1], 3)
             lidar_img = np.zeros(lidar_img_size)
             lidar_img[tuple(lidar_data.T)] = (255, 255, 255)
-            self.surface = pygame.surfarray.make_surface(lidar_img)
+            # self.surface = pygame.surfarray.make_surface(lidar_img)
         else:
             image.convert(self.sensors[self.index][1])
             array = np.frombuffer(image.raw_data, dtype=np.dtype("uint8"))
             array = np.reshape(array, (image.height, image.width, 4))
             array = array[:, :, :3]
             array = array[:, :, ::-1]
-            self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
+            # self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
         if self.recording:
             image.save_to_disk('_out/%08d' % image.frame)
 
