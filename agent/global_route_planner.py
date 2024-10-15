@@ -78,9 +78,18 @@ class GlobalRoutePlanner(object):
         }
         result_x, result_y, speeds, ix, iy, iyaw, d, s, speeds_x, \
             speeds_y, misc, costs, success = fot.run_fot(initial_conditions, hyperparameters)
-        print(result_x)
-        print(result_y)
+        class WP():
+            def __init__(self, x, y):
+                self.transform = carla.Transform()
+                self.transform.location = carla.Location(x=x, y=y)
+            def __str__(self):
+                return f"WP({self.transform.location.x}, {self.transform.location.y})"
+        route = []
+        for x, y in zip(result_x, result_y):
+            route.append((WP(x, y), RoadOption.LANEFOLLOW))
+        print(route)
         assert False
+        return route
         route = self._path_search(origin, destination)
         current_waypoint = self._wmap.get_waypoint(origin)
         destination_waypoint = self._wmap.get_waypoint(destination)
