@@ -1,6 +1,11 @@
 import random
 import carla
 
+parking_vehicle_rotation = [
+    carla.Rotation(yaw=180),
+    carla.Rotation(yaw=0)
+]
+
 town04_bound = {
     "x_min": 264.0,
     "x_max": 304.0,

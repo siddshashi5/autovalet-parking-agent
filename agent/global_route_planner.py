@@ -88,7 +88,7 @@ class GlobalRoutePlanner(object):
         for x, y in zip(result_x, result_y):
             route.append((WP(x, y), RoadOption.LANEFOLLOW))
         print(route)
-        assert False
+        # assert False
         return route
         route = self._path_search(origin, destination)
         current_waypoint = self._wmap.get_waypoint(origin)
