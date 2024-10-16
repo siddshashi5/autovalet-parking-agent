@@ -342,6 +342,7 @@ class ParkingLot(object):
         self.world = world
         self.num_parked_cars = random.randint(1, len(self.world.parking_spawn_points))
         self.parked_cars = []
+        self.parked_cars_bbs = []
         
         blueprints = self.world.world.get_blueprint_library().filter('vehicle')
         blueprints = [x for x in blueprints if self.valid_vehicle(x)]
@@ -355,8 +356,9 @@ class ParkingLot(object):
             if npc is not None:
                 npc.set_simulate_physics(False)
                 self.parked_cars.append(npc)
-                print("spawned actor %s at (%.3f, %.3f, %.3f)",
-                              npc_bp.id, spawn_point.x, spawn_point.y, spawn_point.z)
+                self.parked_cars_bbs.append([spawn_point.x - npc.bounding_box.extent.x, spawn_point.y - npc.bounding_box.extent.y,
+                                             spawn_point.x + npc.bounding_box.extent.x, spawn_point.y + npc.bounding_box.extent.y])
+                # print(f"bounding box: {npc.bounding_box}, x:{spawn_point.x}, y:{spawn_point.y}, z:{spawn_point.z}")
 
 
     def valid_vehicle(self, vehicle_bp):
@@ -376,7 +378,7 @@ def game_loop(host, port):
         world = World(carla_world)
         world.world.unload_map_layer(carla.MapLayer.ParkedVehicles)
 
-        agent = BasicAgent(world.player, 30)
+        agent = BasicAgent(world, 30)
         agent.follow_speed_limits(True)
 
         spawn_points = world.parking_spawn_points

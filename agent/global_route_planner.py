@@ -22,13 +22,14 @@ class GlobalRoutePlanner(object):
     This class provides a very high level route plan.
     """
 
-    def __init__(self, wmap, sampling_resolution):
+    def __init__(self, wmap, sampling_resolution, world):
         self._sampling_resolution = sampling_resolution
         self._wmap = wmap
         self._topology = None
         self._graph = None
         self._id_map = None
         self._road_id_to_edge = None
+        self._parking_lot = world.parking_lot
 
         self._intersection_end_node = -1
         self._previous_decision = RoadOption.VOID
@@ -76,6 +77,9 @@ class GlobalRoutePlanner(object):
             "klon": 1.0,
             "num_threads": 0,
         }
+            
+        obs = self._parking_lot.parked_cars_bbs
+
         result_x, result_y, speeds, ix, iy, iyaw, d, s, speeds_x, \
             speeds_y, misc, costs, success = fot.run_fot(initial_conditions, hyperparameters)
         class WP():
