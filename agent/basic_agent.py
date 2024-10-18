@@ -12,6 +12,7 @@ It can also make use of the global route planner to follow a specifed route
 import carla
 from shapely.geometry import Polygon
 
+from agent.waypoint import Waypoint
 from agent.local_planner import LocalPlanner, RoadOption
 from agent.global_route_planner import GlobalRoutePlanner
 from agent.misc import (get_speed, is_within_distance,
@@ -155,16 +156,15 @@ class BasicAgent(object):
             start_location = self._vehicle.get_location()
             clean_queue = False
 
-        start_waypoint = self._map.get_waypoint(start_location)
-        end_waypoint = self._map.get_waypoint(end_location)
+        start_waypoint = Waypoint(start_location.x, start_location.y)
+        end_waypoint = Waypoint(end_location.x, end_location.y)
+        self._world.debug.draw_string(start_waypoint.transform.location, 'start', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
+        self._world.debug.draw_string(end_waypoint.transform.location, 'end', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
 
         route_trace = self.trace_route(start_waypoint, end_waypoint)
-        # wp1 = self._world.get_map().get_waypoint(self._vehicle.get_location(),project_to_road=False, lane_type=(carla.LaneType.Parking))
-        # self._world.debug.draw_string(wp1.transform.location, 'ooo', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
-        # for waypoint, _ in route_trace:
-        #     self._world.debug.draw_string(waypoint.transform.location, 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
-        # for wp in self._world.get_map().generate_waypoints(2.0):
-        #     self._world.debug.draw_string(wp.transform.location, 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=120.0, persistent_lines=True)
+
+        for waypoint, _ in route_trace:
+            self._world.debug.draw_string(waypoint.transform.location, 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
 
         self._local_planner.set_global_plan(route_trace, clean_queue=clean_queue)
 

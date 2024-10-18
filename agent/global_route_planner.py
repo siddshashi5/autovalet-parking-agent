@@ -14,8 +14,10 @@ import networkx as nx
 
 import carla
 import lib.frenet_optimal_trajectory_planner.FrenetOptimalTrajectory.fot_wrapper as fot
+from agent.waypoint import Waypoint
 from agent.local_planner import RoadOption
 from agent.misc import vector
+import matplotlib.pyplot as plt
 
 class GlobalRoutePlanner(object):
     """
@@ -78,17 +80,12 @@ class GlobalRoutePlanner(object):
         }
         result_x, result_y, speeds, ix, iy, iyaw, d, s, speeds_x, \
             speeds_y, misc, costs, success = fot.run_fot(initial_conditions, hyperparameters)
-        class WP():
-            def __init__(self, x, y):
-                self.transform = carla.Transform()
-                self.transform.location = carla.Location(x=x, y=y)
-            def __str__(self):
-                return f"WP({self.transform.location.x}, {self.transform.location.y})"
         route = []
         for x, y in zip(result_x, result_y):
-            route.append((WP(x, y), RoadOption.LANEFOLLOW))
-        print(route)
-        assert False
+            route.append((Waypoint(x, y), RoadOption.LANEFOLLOW))
+        plt.scatter(result_x, result_y)
+        plt.scatter([origin.x, destination.x], [origin.y, destination.y], marker='x')
+        plt.savefig('trajectory.png')
         return route
         route = self._path_search(origin, destination)
         current_waypoint = self._wmap.get_waypoint(origin)
