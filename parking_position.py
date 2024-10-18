@@ -32,6 +32,11 @@ player_location_Town04 = carla.Transform(
     carla.Rotation(pitch=0.0, yaw=90.0, roll=0.0)
 )
 
+player_location_Town05 = carla.Transform(
+    carla.Location(x=0.0, y=0.0, z=10),
+    carla.Rotation(pitch=0.0, yaw=90.0, roll=0.0)
+)
+
 parking_vehicle_locations_Town04 = [
     # row 1
     carla.Location(x=298.5, y=-235.73, z=0.3),  # 1-1

@@ -85,9 +85,8 @@ class World(object):
         cam_index = self.camera_manager.index if self.camera_manager is not None else 0
         cam_pos_id = self.camera_manager.transform_index if self.camera_manager is not None else 0
 
-        # Get a random blueprint.
-        blueprint_list = get_actor_blueprints(self.world, 'vehicle.*', '2')
-        blueprint = random.choice(blueprint_list)
+        # Spawn car
+        blueprint = self.world.get_blueprint_library().filter('vehicle.mercedes.coupe_2020')[0]
         blueprint.set_attribute('role_name', 'hero')
         if blueprint.has_attribute('color'):
             color = random.choice(blueprint.get_attribute('color').recommended_values)
@@ -344,7 +343,6 @@ def game_loop(host, port):
         spawn_points = parking_position.parking_vehicle_locations_Town04 
         destination = random.choice(spawn_points)
         agent.set_destination(destination)
-        world.world.debug.draw_string(destination, 'X', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
 
         while True:
             world.world.wait_for_tick()
