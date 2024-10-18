@@ -71,6 +71,13 @@ class World(object):
         """Constructor method"""
         self.world = carla_world
         self.map = self.world.get_map()
+
+        # if self.map == 'Town04_Opt':
+        self.parking_spawn_points = parking_position.parking_vehicle_locations_Town04.copy()
+        # else:
+        #     print('Invalid map %s', self.map)
+        #     sys.exit(1)
+
         self.player = None
         self.collision_sensor = None
         self.lane_invasion_sensor = None
@@ -78,6 +85,7 @@ class World(object):
         self.camera_manager = None
         self._weather_presets = find_weather_presets()
         self._weather_index = 0
+        self.parking_lot = None
         self.restart()
 
     def restart(self):
@@ -115,6 +123,7 @@ class World(object):
         self.camera_manager = CameraManager(self.player)
         self.camera_manager.transform_index = cam_pos_id
         self.camera_manager.set_sensor(cam_index)
+        self.parking_lot = ParkingLot(self)
 
     def next_weather(self, reverse=False):
         """Get next weather setting"""
@@ -326,21 +335,52 @@ class CameraManager(object):
         if self.recording:
             image.save_to_disk('_out/%08d' % image.frame)
 
+class ParkingLot(object):
+    """Class for Parking Lot"""
+    def __init__(self, world):
+        self.world = world
+        self.num_parked_cars = random.randint(1, len(self.world.parking_spawn_points))
+        self.parked_cars = []
+        self.parked_cars_bbs = []
+        
+        blueprints = self.world.world.get_blueprint_library().filter('vehicle')
+        blueprints = [x for x in blueprints if self.valid_vehicle(x)]
+
+        for i in range(self.num_parked_cars):
+            spawn_point = self.world.parking_spawn_points[i]
+
+            npc_transform = carla.Transform(spawn_point, rotation=random.choice(parking_position.parking_vehicle_rotation))
+            npc_bp = random.choice(blueprints)
+            npc = self.world.world.try_spawn_actor(npc_bp, npc_transform)
+            if npc is not None:
+                npc.set_simulate_physics(False)
+                self.parked_cars.append(npc)
+                self.parked_cars_bbs.append([spawn_point.x - npc.bounding_box.extent.x, spawn_point.y - npc.bounding_box.extent.y,
+                                             spawn_point.x + npc.bounding_box.extent.x, spawn_point.y + npc.bounding_box.extent.y])
+                # print(f"bounding box: {npc.bounding_box}, x:{spawn_point.x}, y:{spawn_point.y}, z:{spawn_point.z}")
+
+
+    def valid_vehicle(self, vehicle_bp):
+        is_four_wheels = int(vehicle_bp.get_attribute('number_of_wheels')) == 4
+        return is_four_wheels
+
+
 def game_loop(host, port):
     world = None
 
     try:
         client = carla.Client(host, port)
         client.set_timeout(60.0)
-        client.load_world('Town04')
+        carla_world = client.load_world('Town04_Opt', carla.MapLayer.ParkedVehicles)
 
         traffic_manager = client.get_trafficmanager()
-        world = World(client.get_world())
+        world = World(carla_world)
+        world.world.unload_map_layer(carla.MapLayer.ParkedVehicles)
 
-        agent = BasicAgent(world.player, 30)
+        agent = BasicAgent(world, 30)
         agent.follow_speed_limits(True)
 
-        spawn_points = parking_position.parking_vehicle_locations_Town04 
+        spawn_points = world.parking_spawn_points
         destination = random.choice(spawn_points)
         agent.set_destination(destination)
 
