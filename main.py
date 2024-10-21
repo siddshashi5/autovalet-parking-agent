@@ -339,14 +339,18 @@ class ParkingLot(object):
     """Class for Parking Lot"""
     def __init__(self, world):
         self.world = world
-        self.num_parked_cars = random.randint(1, len(self.world.parking_spawn_points))
+        self.num_parked_cars = random.randint(5, 15)
         self.parked_cars = []
         self.parked_cars_bbs = []
         
         blueprints = self.world.world.get_blueprint_library().filter('vehicle')
         blueprints = [x for x in blueprints if self.valid_vehicle(x)]
 
-        for i in range(self.num_parked_cars):
+        spawn_points = np.arange(len(self.world.parking_spawn_points))
+        np.random.shuffle(spawn_points)
+        spawn_points = spawn_points[:self.num_parked_cars]
+
+        for i in spawn_points:
             spawn_point = self.world.parking_spawn_points[i]
 
             npc_transform = carla.Transform(spawn_point, rotation=random.choice(parking_position.parking_vehicle_rotation))

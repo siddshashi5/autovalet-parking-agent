@@ -48,13 +48,14 @@ class GlobalRoutePlanner(object):
         from origin to destination
         """
         route_trace = []
+        obs = self._parking_lot.parked_cars_bbs
         initial_conditions = {
             'ps': 0,
             'target_speed': 20,
             'pos': np.array([origin.x, origin.y]),
             'vel': np.array([0, 0]),
             'wp': np.array([[origin.x, origin.y], [destination.x, destination.y]]),
-            'obs': np.array([])
+            'obs': np.array(obs)
         }
         hyperparameters = {
             "max_speed": 25.0,
@@ -79,17 +80,22 @@ class GlobalRoutePlanner(object):
             "klon": 1.0,
             "num_threads": 0,
         }
-            
-        obs = self._parking_lot.parked_cars_bbs
 
         result_x, result_y, speeds, ix, iy, iyaw, d, s, speeds_x, \
             speeds_y, misc, costs, success = fot.run_fot(initial_conditions, hyperparameters)
         route = []
         for x, y in zip(result_x, result_y):
             route.append((Waypoint(x, y), RoadOption.LANEFOLLOW))
+
         plt.scatter(result_x, result_y)
         plt.scatter([origin.x, destination.x], [origin.y, destination.y], marker='x')
+        for o in obs:
+            plt.plot([o[0], o[0]], [o[1], o[3]], marker='o')
+            plt.plot([o[2], o[2]], [o[1], o[3]], marker='o')
+            plt.plot([o[0], o[2]], [o[1], o[1]], marker='o')
+            plt.plot([o[0], o[2]], [o[3], o[3]], marker='o')
         plt.savefig('trajectory.png')
+
         return route
         route = self._path_search(origin, destination)
         current_waypoint = self._wmap.get_waypoint(origin)
