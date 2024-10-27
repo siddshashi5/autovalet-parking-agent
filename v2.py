@@ -1,6 +1,7 @@
 import carla
 import numpy as np
 import lib.frenet_optimal_trajectory_planner.FrenetOptimalTrajectory.fot_wrapper as fot
+from agent.controller import VehiclePIDController
 
 HOST = '127.0.0.1'
 PORT = 2000
@@ -36,12 +37,13 @@ class Car():
         self.ps = 0
         self.obs = []
         self.destination = destination
+        self.controller = VehiclePIDController(self.actor, {'K_P': 1.95, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 1.0, 'K_I': 0.05, 'K_D': 0, 'dt': 0.05})
         # TODO: mount sensors
 
     def perceive(self):
         self.pos = self.actor.get_location()
         self.vel = self.actor.get_velocity()
-        # TODO: get/update map representation from sensor data only
+        # TODO: get/update obstacles from sensor data only
 
     def plan(self):
         # TODO: only replan trajectory if necessary
@@ -64,11 +66,8 @@ class Car():
         for x, y in zip(result_x, result_y):
             trajectory.append(carla.Location(x=x, y=y, z=pos.z))
 
-        # TODO: pass to control
-
-    def control(self):
-        # TODO: PID control
-        pass
+        # TODO: stop if reached destination OR if unexpected obstacle detected by sensor
+        self.actor.apply_control(self.controller.run_step(5, trajectory[1]))
 
     def run_step(self):
         self.perceive()
