@@ -24,7 +24,7 @@ FOT_HYPERPARAMETERS = {
     "ko": 0.1,
     "klat": 1.0,
     "klon": 1.0,
-    "num_threads": 0,
+    "num_threads": 4,
 }
 REPLAN_THRESHOLD = 5
 TARGET_SPEED = 5
