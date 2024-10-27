@@ -33,7 +33,7 @@ def main():
         # load car
         destination_parking_spot = 25
         destination_parking_spot_loc = parking_vehicle_locations_Town04[destination_parking_spot]
-        destination_parking_spot_loc.x += 2
+        destination_parking_spot_loc.y -= 0.5
         blueprint = world.get_blueprint_library().filter(EGO_VEHICLE)[0]
         car = CarlaCar(world, blueprint, player_location_Town04, destination_parking_spot_loc, debug=DEBUG)
 

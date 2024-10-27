@@ -6,7 +6,7 @@ from v2_controller import VehiclePIDController
 FOT_HYPERPARAMETERS = {
     "max_speed": 25.0,
     "max_accel": 15.0,
-    "max_curvature": 15.0,
+    "max_curvature": 10.0,
     "max_road_width_l": 5.0,
     "max_road_width_r": 5.0,
     "d_road_w": 0.5,
@@ -26,6 +26,8 @@ FOT_HYPERPARAMETERS = {
     "klon": 1.0,
     "num_threads": 4,
 }
+DESTINATION_THRESHOLD = 0.5
+WAYPOINT_THRESHOLD = 1.0
 REPLAN_THRESHOLD = 5
 TARGET_SPEED = 5
 STOP_CONTROL = carla.VehicleControl(brake=1.0)
@@ -68,6 +70,12 @@ class CarlaCar():
         self.world.debug.draw_string(spawn_point.location, 'start', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
         self.world.debug.draw_string(destination, 'end', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
 
+        # TEMP: debug guidance waypoints
+        destination = self.car.destination
+        test = [[destination.x-3, destination.y], [destination.x-2, destination.y], [destination.x-1, destination.y], [destination.x, destination.y], [destination.x+1, destination.y], [destination.x+2, destination.y], [destination.x+3, destination.y]]
+        for pt in test:
+            self.world.debug.draw_string(carla.Location(x=pt[0], y=pt[1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=255, b=0), life_time=120.0, persistent_lines=True)
+
     def debug_step(self):
         trajectory = self.car.trajectory
         if trajectory == self.debug_last_trajectory: return
@@ -100,7 +108,7 @@ class Car():
         # TODO: also stop if unexpected obstacle detected
         pos = self.pos
         destination = self.destination
-        if pos.distance(destination) < 1.0:
+        if pos.distance(destination) < DESTINATION_THRESHOLD:
             return STOP_CONTROL
 
         # remove visited points from trajectory
@@ -108,7 +116,7 @@ class Car():
         num_to_remove = 0
 
         for loc in trajectory:
-            if pos.distance(loc) < 1.0:
+            if pos.distance(loc) < WAYPOINT_THRESHOLD:
                 num_to_remove += 1
             else:
                 break
@@ -124,19 +132,22 @@ class Car():
                 'target_speed': TARGET_SPEED,
                 'pos': np.array([pos.x, pos.y]),
                 'vel': np.array([0, 0]),
-                'wp': np.array([[pos.x, pos.y], [destination.x, destination.y]]),
+                # TODO: make guidance waypoints from bounding box of parking spot
+                'wp': np.array([[pos.x, pos.y], [destination.x-3, destination.y], [destination.x-2, destination.y], [destination.x-1, destination.y], [destination.x, destination.y], [destination.x+1, destination.y], [destination.x+2, destination.y], [destination.x+3, destination.y]]),
                 'obs': np.array(obs)
             }
             result_x, result_y, speeds, ix, iy, iyaw, d, s, speeds_x, speeds_y, \
                 misc, costs, success = fot.run_fot(initial_conditions, FOT_HYPERPARAMETERS)
 
-            trajectory = []
+            new_trajectory = []
             for x, y in zip(result_x, result_y):
-                trajectory.append(carla.Location(x=x, y=y, z=pos.z))
-            self.trajectory = trajectory
+                new_trajectory.append(carla.Location(x=x, y=y, z=pos.z))
+            if new_trajectory:
+                trajectory = self.trajectory = new_trajectory
 
         if not trajectory: return STOP_CONTROL
-        return self.controller.run_step(self.vel, TARGET_SPEED, self.pos, trajectory[1])
+        target_speed = 1 if pos.distance(trajectory[-1]) < DESTINATION_THRESHOLD else TARGET_SPEED
+        return self.controller.run_step(self.vel, target_speed, self.pos, trajectory[0])
 
     def run_step(self):
         self.perceive()
