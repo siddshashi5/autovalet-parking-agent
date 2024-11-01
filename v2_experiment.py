@@ -1,68 +1,23 @@
-import carla
-import random
-from parking_position import player_location_Town04, parking_vehicle_locations_Town04, parking_vehicle_rotation
-from v2 import CarlaCar
+from v2_experiment_utils import load_client, town04_load, town04_spectator_bev, town04_spawn_ego_vehicle, town04_spawn_parked_cars, town04_spectator_follow
 
-HOST = '127.0.0.1'
-PORT = 2000
-DEBUG = True
-EGO_VEHICLE = 'vehicle.tesla.model3'
-PARKED_VEHICLES = [
-    'vehicle.mercedes.coupe_2020',
-    'vehicle.dodge.charger_2020',
-    'vehicle.ford.mustang',
-    'vehicle.jeep.wrangler_rubicon',
-    'vehicle.lincoln.mkz_2017'
-]
+DESTINATION_PARKING_SPOT = 25
+PARKED_CARS = [24, 26]
 
 def main():
     try:
-        print(f"starting simulation on {HOST}:{PORT}")
-        client = carla.Client(HOST, PORT)
-        client.set_timeout(10.0)
+        client = load_client()
 
         # load map
-        world = client.load_world('Town04_Opt')
-        world.unload_map_layer(carla.MapLayer.ParkedVehicles)
+        world = town04_load(client)
 
         # load spectator
-        spectator_location = carla.Location(x=285.9, y=-210.73, z=40)
-        spectator_rotation = carla.Rotation(pitch=-90.0)
-        world.get_spectator().set_transform(carla.Transform(spectator_location, spectator_rotation))
+        town04_spectator_bev(world)
 
         # load car
-        destination_parking_spot = 25
-        destination_parking_spot_loc = parking_vehicle_locations_Town04[destination_parking_spot]
-        destination_parking_spot_loc.y -= 0.5
-        blueprint = world.get_blueprint_library().filter(EGO_VEHICLE)[0]
-        car = CarlaCar(world, blueprint, player_location_Town04, destination_parking_spot_loc, debug=DEBUG)
+        car = town04_spawn_ego_vehicle(world, DESTINATION_PARKING_SPOT)
 
         # load parked cars
-        blueprints = world.get_blueprint_library().filter('vehicle.*.*')
-        blueprints = [bp for bp in blueprints if bp.id in PARKED_VEHICLES]
-        spawn_points = [24, 26]
-        parked_cars = []
-        parked_cars_bbs = []
-
-        for i in spawn_points:
-            spawn_point = parking_vehicle_locations_Town04[i]
-
-            npc_transform = carla.Transform(spawn_point, rotation=random.choice(parking_vehicle_rotation))
-            npc_bp = random.choice(blueprints)
-            npc = world.spawn_actor(npc_bp, npc_transform)
-            npc.set_simulate_physics(False)
-            parked_cars.append(npc)
-            parked_cars_bbs.append([
-                spawn_point.x - npc.bounding_box.extent.x, spawn_point.y - npc.bounding_box.extent.y,
-                spawn_point.x + npc.bounding_box.extent.x, spawn_point.y + npc.bounding_box.extent.y
-            ])
-
-        for i, loc in enumerate(parking_vehicle_locations_Town04):
-            if i == destination_parking_spot or i in spawn_points: continue
-            parked_cars_bbs.append([
-                loc.x - 2.4, loc.y - 0.96,
-                loc.x + 2.4, loc.y + 0.96
-            ])
+        parked_cars, parked_cars_bbs = town04_spawn_parked_cars(world, PARKED_CARS, DESTINATION_PARKING_SPOT)
 
         # HACK: enable perfect perception of parked cars
         car.car.obs = parked_cars_bbs
@@ -71,6 +26,7 @@ def main():
         while True:
             world.wait_for_tick()
             car.run_step()
+            town04_spectator_follow(world, car)
 
     except KeyboardInterrupt:
         print("stopping simulation")
