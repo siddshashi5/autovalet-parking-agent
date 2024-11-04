@@ -106,6 +106,7 @@ class Car():
         # TODO: get/update obstacles from sensor data only
 
     def plan(self):
+        # TODO: handle planning for exploration phase
         # if we're at destination, stop
         # TODO: also stop if unexpected obstacle detected
         pos = self.pos
