@@ -1,23 +1,8 @@
 import carla
 import numpy as np
 import lib.frenet_optimal_trajectory_planner.FrenetOptimalTrajectory.fot_wrapper as fot
-import lib.hybrid_astar_planner.HybridAStar.hybrid_astar_wrapper as hybrid_astar
 from v2_controller import VehiclePIDController
 
-HYBRID_ASTAR_HYPERPARAMETERS = {
-    "step_size": 3.0,
-    "max_iterations": 5000,
-    "completion_threshold": 1.0,
-    "angle_completion_threshold": 3.0,
-    "rad_step": 0.5,
-    "rad_upper_range": 4.0,
-    "rad_lower_range": 4.0,
-    "obstacle_clearance": 0.5,
-    "lane_width": 6.0,
-    "radius": 6.0,
-    "car_length": 3,
-    "car_width": 1
-}
 FOT_HYPERPARAMETERS = {
     "max_speed": 15.0,
     "max_accel": 15.0,
@@ -43,7 +28,7 @@ FOT_HYPERPARAMETERS = {
 }
 DESTINATION_THRESHOLD = 0.5
 WAYPOINT_THRESHOLD = 1.0
-REPLAN_THRESHOLD = 1
+REPLAN_THRESHOLD = 5
 MAX_SPEED = 15
 MIN_SPEED = 1
 SLOWDOWN_CONSTANT = 10
@@ -59,9 +44,6 @@ class CarlaGnssSensor():
     def get_location(self):
         return self.actor.get_location()
 
-    def get_heading(self):
-        return np.radians(self.actor.get_transform().rotation.yaw)
-
     def get_velocity(self):
         return self.actor.get_velocity()
 
@@ -70,7 +52,7 @@ class CarlaCar():
         self.world = world
         self.actor = world.spawn_actor(blueprint, spawn_point)
         self.gnss_sensor = CarlaGnssSensor(self.actor)
-        self.car = Car(self.actor.get_location(), self.actor.get_velocity(), np.radians(self.actor.get_transform().rotation.yaw), destination, self.gnss_sensor)
+        self.car = Car(self.actor.get_location(), self.actor.get_velocity(), destination, self.gnss_sensor)
 
         self.debug = debug
         self.debug_last_trajectory = None
@@ -92,14 +74,9 @@ class CarlaCar():
             self.world.debug.draw_string(carla.Location(x=pt[0], y=pt[1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=255, b=0), life_time=120.0, persistent_lines=True)
 
     def debug_step(self):
-        obs = self.car.obs
-        for ob in obs:
-            self.world.debug.draw_string(carla.Location(x=ob[0], y=ob[1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=255, b=0), life_time=120.0, persistent_lines=True)
-            self.world.debug.draw_string(carla.Location(x=ob[2], y=ob[3]), 'o', draw_shadow=False, color=carla.Color(r=255, g=255, b=0), life_time=120.0, persistent_lines=True)
         trajectory = self.car.trajectory
         if trajectory == self.debug_last_trajectory: return
         self.debug_last_trajectory = trajectory
-
         for loc in trajectory:
             self.world.debug.draw_string(loc, 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
 
@@ -107,10 +84,10 @@ class CarlaCar():
         self.actor.destroy()
 
 class Car():
-    def __init__(self, pos, vel, heading, destination, gnss_sensor):
+    def __init__(self, pos, vel, destination, gnss_sensor):
         self.pos = pos
         self.vel = vel
-        self.heading = heading
+        self.ps = 0
         self.obs = []
         # TODO: handle case where longer side is along different axis
         self.guidance_wps = [[wp_x, wp_y] for wp_x, wp_y in zip(
@@ -126,7 +103,6 @@ class Car():
     def perceive(self):
         self.pos = self.gnss_sensor.get_location()
         self.vel = self.gnss_sensor.get_velocity()
-        self.heading = self.gnss_sensor.get_heading()
         # TODO: get/update obstacles from sensor data only
 
     def plan(self):
@@ -153,6 +129,7 @@ class Car():
         # replan trajectory if needed
         target_speed = (MAX_SPEED-MIN_SPEED) * distance_to_destination / (distance_to_destination + SLOWDOWN_CONSTANT) + MIN_SPEED
         if len(trajectory) < REPLAN_THRESHOLD:
+            ps = self.ps
             vel = self.vel
             obs = self.obs
 
@@ -165,25 +142,21 @@ class Car():
                     break
             guidance_wps = self.guidance_wps = self.guidance_wps[num_truncate:]
 
-            # use hybrid A* planner
+            # use FOT planner
             initial_conditions = {
-                'start': np.array([pos.x, pos.y, self.heading]),
-                'end': np.array([destination.x, destination.y, 0]),
+                'ps': ps,
+                'target_speed': target_speed,
+                'pos': np.array([pos.x, pos.y]),
+                'vel': np.array([vel.x, vel.y]),
+                'wp': np.array([[pos.x, pos.y]] + guidance_wps),
                 'obs': np.array(obs)
             }
-            x_path, y_path, yaw_path, success = hybrid_astar.apply_hybrid_astar(initial_conditions, HYBRID_ASTAR_HYPERPARAMETERS)
-            print(success)
-            # if not success: raise "Can't find path"
-            # print(x_path, y_path)
-            # print(initial_conditions)
-            # import matplotlib.pyplot as plt
-            # plt.plot(x_path, y_path)
-            # plt.savefig('test.png')
-            # assert False
+            result_x, result_y, speeds, ix, iy, iyaw, d, s, speeds_x, speeds_y, \
+                misc, costs, success = fot.run_fot(initial_conditions, FOT_HYPERPARAMETERS)
 
             # truncate points that are too close
             new_trajectory = []
-            for x, y in zip(x_path, y_path):
+            for x, y in zip(result_x, result_y):
                 new_loc = carla.Location(x=x, y=y, z=pos.z)
                 if pos.distance(new_loc) > WAYPOINT_THRESHOLD:
                     new_trajectory.append(new_loc)

@@ -26,7 +26,7 @@ def main():
         while True:
             world.wait_for_tick()
             car.run_step()
-            # town04_spectator_follow(world, car)
+            town04_spectator_follow(world, car)
 
     except KeyboardInterrupt:
         print("stopping simulation")
