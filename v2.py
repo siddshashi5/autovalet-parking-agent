@@ -7,8 +7,8 @@ FOT_HYPERPARAMETERS = {
     "max_speed": 15.0,
     "max_accel": 15.0,
     "max_curvature": 15.0,
-    "max_road_width_l": 5.0,
-    "max_road_width_r": 5.0,
+    "max_road_width_l": 3.0,
+    "max_road_width_r": 3.0,
     "d_road_w": 0.5,
     "dt": 0.2,
     "maxt": 5.0,
@@ -153,6 +153,7 @@ class Car():
             }
             result_x, result_y, speeds, ix, iy, iyaw, d, s, speeds_x, speeds_y, \
                 misc, costs, success = fot.run_fot(initial_conditions, FOT_HYPERPARAMETERS)
+            ps = self.ps = misc['s']
 
             # truncate points that are too close
             new_trajectory = []
