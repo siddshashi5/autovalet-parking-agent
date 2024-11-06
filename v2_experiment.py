@@ -5,7 +5,7 @@ from v2_experiment_utils import (
     town04_spawn_ego_vehicle,
     town04_spawn_parked_cars,
     town04_spectator_follow,
-    town04_get_drivable_grid
+    town04_get_drivable_graph
 )
 
 DESTINATION_PARKING_SPOT = 25
@@ -27,7 +27,7 @@ def main():
         # load car
         car = town04_spawn_ego_vehicle(world, DESTINATION_PARKING_SPOT)
 
-        grid = town04_get_drivable_grid(world)
+        graph = town04_get_drivable_graph(world)
 
         # HACK: enable perfect perception of parked cars
         car.car.obs = parked_cars_bbs

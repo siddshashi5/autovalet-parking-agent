@@ -2,6 +2,8 @@ import random
 import carla
 import numpy as np
 import matplotlib.pyplot as plt
+import networkx
+from skimage.draw import line
 from parking_position import (
     parking_vehicle_locations_Town04,
     parking_vehicle_rotation, 
@@ -81,14 +83,13 @@ def town04_spawn_parked_cars(world, spawn_points, skip):
 
     return parked_cars, parked_cars_bbs
 
-def town04_get_drivable_grid(world):
+def town04_get_grid(world):
     x_size = town04_bound["x_max"] - town04_bound["x_min"] + 1
     y_size = town04_bound["y_max"] - town04_bound["y_min"] + 1
 
-    drivable_matrix = np.zeros((x_size, y_size), dtype=int)
+    grid = np.zeros((x_size, y_size), dtype=int)
 
     vehicles = world.get_actors().filter('vehicle.*')
-
 
     for x in range(town04_bound["x_min"], town04_bound["x_max"] + 1):
         for y in range(town04_bound["y_min"], town04_bound["y_max"] + 1):
@@ -107,12 +108,54 @@ def town04_get_drivable_grid(world):
             if is_drivable:
                 x_index = x - town04_bound["x_min"]
                 y_index = y - town04_bound["y_min"]
-                drivable_matrix[x_index, y_index] = 1
+                grid[x_index, y_index] = 1
     
-    plt.imshow(drivable_matrix, cmap='gray', origin='lower')
-    plt.colorbar(label="Drivable (1) / Non-Drivable (0)")
-    plt.title("Drivable Area in Town04 Parking Lot")
-    plt.xlabel("X Coordinate")
-    plt.ylabel("Y Coordinate")
+    # plt.imshow(grid, cmap='gray', origin='lower')
+    # plt.colorbar(label="Drivable (1) / Non-Drivable (0)")
+    # plt.title("Drivable Area in Town04 Parking Lot")
+    # plt.xlabel("X Coordinate")
+    # plt.ylabel("Y Coordinate")
+    # plt.show()
 
-    return drivable_matrix
+    return grid
+
+def town04_get_drivable_graph(world, threshold=0.7, step=5):
+    grid = town04_get_grid(world)
+
+    drivable_grid = grid > threshold
+
+    # Create graph and add nodes for drivable regions
+    G = networkx.Graph()
+    for y in range(0, drivable_grid.shape[0], step):
+        for x in range(0, drivable_grid.shape[1], step):
+            if drivable_grid[y, x]:
+                G.add_node((x, y, 0.3))
+    
+    # Connect neighbors for each drivable node
+    direction_vectors = [(-step, 0, 0), (step, 0, 0), (0, -step, 0), (0, step, 0), 
+                         (-step, -step, 0), (step, step, 0 ), (-step, step, 0), (step, -step, 0)]
+    for node in G.nodes:
+        x, y, z = node
+        neighbors = [(x+dx, y+dy, z + dz) for dx, dy, dz in direction_vectors]
+        for nx, ny, nz in neighbors:
+            if (nx, ny, nz) in G.nodes and is_path_drivable(x, y, nx, ny, drivable_grid):
+                G.add_edge((x, y, z), (nx, ny, nz))
+
+    # fig, ax = plt.subplots(figsize=(8, 8))
+    # ax.imshow(grid, cmap="gray", origin="upper")
+    
+    # # Draw the graph on top of the matrix
+    # pos = {node: (node[0], node[1]) for node in G.nodes}  # Use only x and y for plotting
+    # networkx.draw_networkx_nodes(G, pos, ax=ax, node_size=30, node_color="blue")
+    # networkx.draw_networkx_edges(G, pos, ax=ax, edge_color="red", width=1)
+
+    # plt.title("Graph of Waypoints on Drivable Map")
+    # plt.savefig("drivable_graph_town04.jpg", dpi=300)
+    # plt.show()
+
+    return G
+
+def is_path_drivable(x1, y1, x2, y2, drivable_grid):
+    """Checks if the path between two points is within drivable regions."""
+    rr, cc = line(y1, x1, y2, x2)  # Generate points on the line between nodes
+    return np.all(drivable_grid[rr, cc])  # Check if all points on the line are drivable
