@@ -7,10 +7,10 @@ parking_vehicle_rotation = [
 ]
 
 town04_bound = {
-    "x_min": 264.0,
-    "x_max": 304.0,
-    "y_min": -241.0,
-    "y_max": -178.0,
+    "x_min": 264,
+    "x_max": 304,
+    "y_min": -241,
+    "y_max": -178,
 }
 
 slot_id = [

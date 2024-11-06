@@ -1,6 +1,13 @@
 import random
 import carla
-from parking_position import parking_vehicle_locations_Town04, parking_vehicle_rotation, player_location_Town04
+import numpy as np
+import matplotlib.pyplot as plt
+from parking_position import (
+    parking_vehicle_locations_Town04,
+    parking_vehicle_rotation, 
+    player_location_Town04,
+    town04_bound 
+)
 from v2 import CarlaCar
 
 HOST = '127.0.0.1'
@@ -73,3 +80,39 @@ def town04_spawn_parked_cars(world, spawn_points, skip):
         parked_cars_bbs.append(approximate_bb_from_center(loc))
 
     return parked_cars, parked_cars_bbs
+
+def town04_get_drivable_grid(world):
+    x_size = town04_bound["x_max"] - town04_bound["x_min"] + 1
+    y_size = town04_bound["y_max"] - town04_bound["y_min"] + 1
+
+    drivable_matrix = np.zeros((x_size, y_size), dtype=int)
+
+    vehicles = world.get_actors().filter('vehicle.*')
+
+
+    for x in range(town04_bound["x_min"], town04_bound["x_max"] + 1):
+        for y in range(town04_bound["y_min"], town04_bound["y_max"] + 1):
+            is_drivable = True
+            point_location = carla.Location(x=x, y=y, z=0.3)
+
+            for vehicle in vehicles:
+                bounding_box = vehicle.bounding_box
+                vehicle_transform = vehicle.get_transform()
+                
+                # Check if the point is within the vehicle's bounding box
+                if bounding_box.contains(point_location, vehicle_transform):
+                    is_drivable = False
+                    break
+
+            if is_drivable:
+                x_index = x - town04_bound["x_min"]
+                y_index = y - town04_bound["y_min"]
+                drivable_matrix[x_index, y_index] = 1
+    
+    plt.imshow(drivable_matrix, cmap='gray', origin='lower')
+    plt.colorbar(label="Drivable (1) / Non-Drivable (0)")
+    plt.title("Drivable Area in Town04 Parking Lot")
+    plt.xlabel("X Coordinate")
+    plt.ylabel("Y Coordinate")
+
+    return drivable_matrix
