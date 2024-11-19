@@ -116,6 +116,62 @@ parking_vehicle_locations_Town04 = [
     carla.Location(x=272.5, y=-188.20, z=0.3),  # 4-16
 ]
 
+parking_lane_waypoints_Town04 = [
+    # lane 1
+    carla.Location(x=303.95, y=-235.73, z=0.3),  
+    carla.Location(x=303.95, y=-232.73, z=0.3),  
+    carla.Location(x=303.95, y=-229.53, z=0.3),  
+    carla.Location(x=303.95, y=-226.43, z=0.3),  
+    carla.Location(x=303.95, y=-223.43, z=0.3),  
+    carla.Location(x=303.95, y=-220.23, z=0.3),  
+    carla.Location(x=303.95, y=-217.23, z=0.3),  
+    carla.Location(x=303.95, y=-214.03, z=0.3),  
+    carla.Location(x=303.95, y=-210.73, z=0.3),  
+    carla.Location(x=303.95, y=-207.30, z=0.3), 
+    carla.Location(x=303.95, y=-204.23, z=0.3),  
+    carla.Location(x=303.95, y=-201.03, z=0.3),  
+    carla.Location(x=303.95, y=-198.03, z=0.3),  
+    carla.Location(x=303.95, y=-194.90, z=0.3),  
+    carla.Location(x=303.95, y=-191.53, z=0.3),  
+    carla.Location(x=303.95, y=-188.20, z=0.3),  
+
+    # lane 2
+    carla.Location(x=285.45, y=-235.73, z=0.3), 
+    carla.Location(x=285.45, y=-232.73, z=0.3),  
+    carla.Location(x=285.45, y=-229.53, z=0.3),  
+    carla.Location(x=285.45, y=-226.43, z=0.3),  
+    carla.Location(x=285.45, y=-223.43, z=0.3),  
+    carla.Location(x=285.45, y=-220.23, z=0.3),  
+    carla.Location(x=285.45, y=-217.23, z=0.3),  
+    carla.Location(x=285.45, y=-214.03, z=0.3), 
+    carla.Location(x=285.45, y=-210.73, z=0.3),  
+    carla.Location(x=285.45, y=-207.30, z=0.3),  
+    carla.Location(x=285.45, y=-204.23, z=0.3),  
+    carla.Location(x=285.45, y=-201.03, z=0.3),  
+    carla.Location(x=285.45, y=-198.03, z=0.3),  
+    carla.Location(x=285.45, y=-194.90, z=0.3),  
+    carla.Location(x=285.45, y=-191.53, z=0.3),  
+    carla.Location(x=285.45, y=-188.20, z=0.3),  
+
+    # lane 3
+    carla.Location(x=267.05, y=-235.73, z=0.3),  
+    carla.Location(x=267.05, y=-232.73, z=0.3),  
+    carla.Location(x=267.05, y=-229.53, z=0.3),  
+    carla.Location(x=267.05, y=-226.43, z=0.3),  
+    carla.Location(x=267.05, y=-223.43, z=0.3),  
+    carla.Location(x=267.05, y=-220.23, z=0.3),  
+    carla.Location(x=267.05, y=-217.23, z=0.3), 
+    carla.Location(x=267.05, y=-214.03, z=0.3),  
+    carla.Location(x=267.05, y=-210.73, z=0.3),  
+    carla.Location(x=267.05, y=-207.30, z=0.3),  
+    carla.Location(x=267.05, y=-204.23, z=0.3),  
+    carla.Location(x=267.05, y=-201.03, z=0.3),  
+    carla.Location(x=267.05, y=-198.03, z=0.3),  
+    carla.Location(x=267.05, y=-194.90, z=0.3),  
+    carla.Location(x=267.05, y=-191.53, z=0.3),  
+    carla.Location(x=267.05, y=-188.20, z=0.3),  
+]
+
 class EgoPosTown04:
     def __init__(self):
         self.x = 285.600006   # 2-1 slot.x

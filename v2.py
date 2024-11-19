@@ -89,6 +89,7 @@ class Car():
         self.vel = vel
         self.ps = 0
         self.obs = []
+        self.lane_waypoints = []
         # TODO: handle case where longer side is along different axis
         self.guidance_wps = [[wp_x, wp_y] for wp_x, wp_y in zip(
             np.linspace(destination[0], destination[2], NUM_GUIDANCE_WPS).tolist(),
