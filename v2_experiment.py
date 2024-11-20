@@ -8,6 +8,11 @@ from v2_experiment_utils import (
     town04_get_drivable_graph
 )
 
+# For lane waypoint hack
+from parking_position import (
+    parking_lane_waypoints_Town04
+)
+
 DESTINATION_PARKING_SPOT = 25
 PARKED_CARS = [24, 26]
 
@@ -27,10 +32,12 @@ def main():
         # load car
         car = town04_spawn_ego_vehicle(world, DESTINATION_PARKING_SPOT)
 
-        graph = town04_get_drivable_graph(world)
+        # graph = town04_get_drivable_graph(world)
 
         # HACK: enable perfect perception of parked cars
         car.car.obs = parked_cars_bbs
+        # HACK: set lane waypoints to guide parking in adjacent lanes
+        car.car.lane_waypoints = parking_lane_waypoints_Town04
 
         # run simulation
         while True:
