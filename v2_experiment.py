@@ -14,7 +14,7 @@ from parking_position import (
     parking_lane_waypoints_Town04
 )
 
-DESTINATION_PARKING_SPOT = 17
+DESTINATION_PARKING_SPOT = 25
 PARKED_CARS = [24, 26]
 
 def main():
