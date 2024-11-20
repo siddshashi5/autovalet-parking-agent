@@ -1,5 +1,7 @@
+from enum import Enum
 import carla
 import numpy as np
+import networkx as nx
 import lib.frenet_optimal_trajectory_planner.FrenetOptimalTrajectory.fot_wrapper as fot
 from v2_controller import VehiclePIDController
 
@@ -37,6 +39,10 @@ SLOWDOWN_CONSTANT = 10
 NUM_GUIDANCE_WPS = 6
 STOP_CONTROL = carla.VehicleControl(brake=1.0)
 
+class Mode(Enum):
+    PARKING = 0
+    PARKED = 1
+
 # TODO: get data from actual GNSS sensor instead of getting
 # perfect vehicle data from CARLA
 class CarlaGnssSensor():
@@ -68,12 +74,13 @@ class CarlaCar():
     def debug_init(self, spawn_point, destination):
         self.world.debug.draw_string(spawn_point.location, 'start', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
         self.world.debug.draw_string(destination, 'end', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
-        for pt in self.car.guidance_wps:
-            self.world.debug.draw_string(carla.Location(x=pt[0], y=pt[1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=255, b=0), life_time=120.0, persistent_lines=True)
 
     def debug_step(self):
+        self.world.debug.draw_string(self.car.pos, 'X', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
         for loc in self.car.trajectory:
             self.world.debug.draw_string(loc, 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
+        for pt in self.car.guidance_wps:
+            self.world.debug.draw_string(carla.Location(x=pt[0], y=pt[1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=255, b=0), life_time=1.0, persistent_lines=True)
 
     def destroy(self):
         self.actor.destroy()
@@ -84,22 +91,22 @@ class Car():
         self.vel = vel
         self.ps = 0
         self.obs = []
-        self.lane_waypoints = []
-        # TODO: handle case where longer side is along different axis
-        self.guidance_wps = [[wp_x, wp_y] for wp_x, wp_y in zip(
-            np.linspace(destination[0] - 2, destination[2], NUM_GUIDANCE_WPS).tolist(),
-            [(destination[1] + destination[3])/2] * NUM_GUIDANCE_WPS,
-        )]
+        self.lane_wps = []
+        self.guidance_wps = []
         self.destination = carla.Location(x=(destination[0] + destination[2]) / 2, y=(destination[1] + destination[3]) / 2)
+        self.destination_bb = destination
         self.fast_controller = VehiclePIDController({'K_P': 2, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 1.0, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05})
         self.slow_controller = VehiclePIDController({'K_P': 8, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 1.0, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05})
         self.gnss_sensor = gnss_sensor
         self.trajectory = []
+        self.mode = Mode.PARKING
 
     def perceive(self):
         self.pos = self.gnss_sensor.get_location()
+        self.pos.x += 0.25
         self.vel = self.gnss_sensor.get_velocity()
-        # TODO: get/update obstacles from sensor data only
+        # TODO: get/update obstacles and lane waypoints from sensor data only,
+        # adding data to graph as needed
 
     def plan(self):
         # TODO: handle planning for exploration phase
@@ -108,19 +115,45 @@ class Car():
         pos = self.pos
         destination = self.destination
         distance_to_destination = pos.distance(destination)
-        if distance_to_destination < DESTINATION_THRESHOLD:
+        if self.mode == Mode.PARKED or distance_to_destination < DESTINATION_THRESHOLD:
+            self.mode = Mode.PARKED
             return STOP_CONTROL
+
+        # plan guidance wps if needed
+        guidance_wps = self.guidance_wps
+        lane_wps = self.lane_wps
+        if not guidance_wps:
+            # find closest waypoints to pos and destination
+            pos_lane_wp = min(range(len(lane_wps)), key=lambda i: pos.distance(carla.Location(x=lane_wps[i][0], y=lane_wps[i][1])))
+            destination_lane_wp = min(range(len(lane_wps)), key=lambda i: destination.distance(carla.Location(x=lane_wps[i][0], y=lane_wps[i][1])))
+
+            # find shortest path
+            G = nx.Graph()
+            for i, waypoint in enumerate(lane_wps):
+                G.add_node(i, pos=(waypoint[0], waypoint[1]))
+            for i in range(len(lane_wps) - 1):
+                G.add_edge(i, i + 1)
+            guidance_wps.append([pos.x, pos.y])
+            for wp in map(lambda i: lane_wps[i], nx.shortest_path(G, source=pos_lane_wp, target=destination_lane_wp)):
+                guidance_wps.append(wp)
+
+            # add additional guidance waypoints from parking spot
+            # TODO: handle case where longer side is along different axis
+            destination_bb = self.destination_bb
+            for wp_x, wp_y in zip(
+                np.linspace(destination_bb[0] - 2, destination_bb[2], NUM_GUIDANCE_WPS).tolist(),
+                [(destination_bb[1] + destination_bb[3])/2] * NUM_GUIDANCE_WPS,
+            ):
+                guidance_wps.append([wp_x, wp_y])
 
         # remove visited points from trajectory
         trajectory = self.trajectory
         num_to_remove = 0
-
         for loc in trajectory:
             if pos.distance(loc) < WAYPOINT_THRESHOLD:
                 num_to_remove += 1
             else:
                 break
-
         if num_to_remove > 0:
             trajectory = self.trajectory = trajectory[num_to_remove:]
 
@@ -131,24 +164,13 @@ class Car():
             vel = self.vel
             obs = self.obs
 
-            # truncate visited guidance waypoints
-            guidance_wps = self.guidance_wps
-            num_truncate = 0
-            for wp in guidance_wps:
-                if pos.distance(carla.Location(x=wp[0], y=wp[1])) < WAYPOINT_THRESHOLD:
-                    num_truncate += 1
-                else:
-                    break
-            if num_truncate > 0:
-                guidance_wps = self.guidance_wps = guidance_wps[num_truncate:]
-
             # use FOT planner
             initial_conditions = {
                 'ps': ps,
                 'target_speed': kmph_to_mps(target_speed),
                 'pos': np.array([pos.x, pos.y]),
                 'vel': np.array([kmph_to_mps(vel.x), kmph_to_mps(vel.y)]),
-                'wp': np.array([[pos.x, pos.y]] + guidance_wps),
+                'wp': np.array(guidance_wps),
                 'obs': np.array(obs)
             }
             result_x, result_y, speeds, ix, iy, iyaw, d, s, speeds_x, speeds_y, \
@@ -165,7 +187,7 @@ class Car():
                 trajectory = self.trajectory = new_trajectory
 
         if not trajectory: return STOP_CONTROL
-        ctrl = (self.slow_controller if mps_to_kmph(self.vel.length()) < 10 else self.fast_controller).run_step(self.vel, target_speed, pos, trajectory[0])
+        ctrl = (self.slow_controller if mps_to_kmph(self.vel.length()) < SLOWDOWN_CONSTANT else self.fast_controller).run_step(self.vel, target_speed, pos, trajectory[0])
         return ctrl
 
     def run_step(self):

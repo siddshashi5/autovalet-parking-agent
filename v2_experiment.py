@@ -1,5 +1,6 @@
 from v2_experiment_utils import (
     load_client,
+    is_parked,
     town04_load,
     town04_spectator_bev,
     town04_spawn_ego_vehicle,
@@ -13,7 +14,7 @@ from parking_position import (
     parking_lane_waypoints_Town04
 )
 
-DESTINATION_PARKING_SPOT = 25
+DESTINATION_PARKING_SPOT = 17
 PARKED_CARS = [24, 26]
 
 def main():
@@ -37,11 +38,11 @@ def main():
         # HACK: enable perfect perception of parked cars
         car.car.obs = parked_cars_bbs
         # HACK: set lane waypoints to guide parking in adjacent lanes
-        car.car.lane_waypoints = parking_lane_waypoints_Town04
+        car.car.lane_wps = parking_lane_waypoints_Town04
 
         # run simulation
-        while True:
-            world.wait_for_tick()
+        while not is_parked(car):
+            world.tick()
             car.run_step()
             # town04_spectator_follow(world, car)
 

@@ -10,7 +10,7 @@ from parking_position import (
     player_location_Town04,
     town04_bound 
 )
-from v2 import CarlaCar
+from v2 import CarlaCar, Mode
 
 HOST = '127.0.0.1'
 PORT = 2000
@@ -29,6 +29,9 @@ def load_client():
     client = carla.Client(HOST, PORT)
     client.set_timeout(10.0)
     return client
+
+def is_parked(car):
+    return car.car.mode == Mode.PARKED
 
 def approximate_bb_from_center(loc, padding=0):
     return [
@@ -50,6 +53,10 @@ def town04_spectator_follow(world, car):
 def town04_load(client):
     world = client.load_world('Town04_Opt')
     world.unload_map_layer(carla.MapLayer.ParkedVehicles)
+    settings = world.get_settings()
+    settings.synchronous_mode = True
+    settings.fixed_delta_seconds = 0.1
+    world.apply_settings(settings)
     return world
 
 def town04_spawn_ego_vehicle(world, destination_parking_spot):
