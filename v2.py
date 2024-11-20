@@ -3,19 +3,21 @@ import numpy as np
 import lib.frenet_optimal_trajectory_planner.FrenetOptimalTrajectory.fot_wrapper as fot
 from v2_controller import VehiclePIDController
 
+def kmph_to_mps(speed): return speed/3.6
+def mps_to_kmph(speed): return speed*3.6
 FOT_HYPERPARAMETERS = {
-    "max_speed": 15.0,
+    "max_speed": kmph_to_mps(15.0),
     "max_accel": 15.0,
     "max_curvature": 15.0,
     "max_road_width_l": 3.0,
     "max_road_width_r": 3.0,
     "d_road_w": 0.5,
     "dt": 0.2,
-    "maxt": 5.0,
-    "mint": 2.0,
+    "maxt": 10.0,
+    "mint": 5.0,
     "d_t_s": 0.5,
-    "n_s_sample": 2.0,
-    "obstacle_clearance": 0.6,
+    "n_s_sample": 1.0,
+    "obstacle_clearance": 0.2,
     "kd": 1.0,
     "kv": 0.1,
     "ka": 0.1,
@@ -55,7 +57,6 @@ class CarlaCar():
         self.car = Car(self.actor.get_location(), self.actor.get_velocity(), destination, self.gnss_sensor)
 
         self.debug = debug
-        self.debug_last_trajectory = None
         if debug:
             self.debug_init(spawn_point, self.car.destination)
 
@@ -67,17 +68,11 @@ class CarlaCar():
     def debug_init(self, spawn_point, destination):
         self.world.debug.draw_string(spawn_point.location, 'start', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
         self.world.debug.draw_string(destination, 'end', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
-
-        # TEMP: debug guidance waypoints
-        guidance_wps = self.car.guidance_wps
-        for pt in guidance_wps:
+        for pt in self.car.guidance_wps:
             self.world.debug.draw_string(carla.Location(x=pt[0], y=pt[1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=255, b=0), life_time=120.0, persistent_lines=True)
 
     def debug_step(self):
-        trajectory = self.car.trajectory
-        if trajectory == self.debug_last_trajectory: return
-        self.debug_last_trajectory = trajectory
-        for loc in trajectory:
+        for loc in self.car.trajectory:
             self.world.debug.draw_string(loc, 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
 
     def destroy(self):
@@ -91,14 +86,14 @@ class Car():
         self.obs = []
         # TODO: handle case where longer side is along different axis
         self.guidance_wps = [[wp_x, wp_y] for wp_x, wp_y in zip(
-            np.linspace(destination[0], destination[2], NUM_GUIDANCE_WPS).tolist(),
+            np.linspace(destination[0] - 2, destination[2], NUM_GUIDANCE_WPS).tolist(),
             [(destination[1] + destination[3])/2] * NUM_GUIDANCE_WPS,
         )]
         self.destination = carla.Location(x=(destination[0] + destination[2]) / 2, y=(destination[1] + destination[3]) / 2)
-        self.controller = VehiclePIDController({'K_P': 8, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 1.0, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05})
+        self.fast_controller = VehiclePIDController({'K_P': 2, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 1.0, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05})
+        self.slow_controller = VehiclePIDController({'K_P': 8, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 1.0, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05})
         self.gnss_sensor = gnss_sensor
         self.trajectory = []
-        # TODO: mount sensors
 
     def perceive(self):
         self.pos = self.gnss_sensor.get_location()
@@ -125,7 +120,8 @@ class Car():
             else:
                 break
 
-        trajectory = self.trajectory = trajectory[num_to_remove:]
+        if num_to_remove > 0:
+            trajectory = self.trajectory = trajectory[num_to_remove:]
 
         # replan trajectory if needed
         target_speed = (MAX_SPEED-MIN_SPEED) * distance_to_destination / (distance_to_destination + SLOWDOWN_CONSTANT) + MIN_SPEED
@@ -135,20 +131,22 @@ class Car():
             obs = self.obs
 
             # truncate visited guidance waypoints
+            guidance_wps = self.guidance_wps
             num_truncate = 0
-            for wp in self.guidance_wps:
+            for wp in guidance_wps:
                 if pos.distance(carla.Location(x=wp[0], y=wp[1])) < WAYPOINT_THRESHOLD:
                     num_truncate += 1
                 else:
                     break
-            guidance_wps = self.guidance_wps = self.guidance_wps[num_truncate:]
+            if num_truncate > 0:
+                guidance_wps = self.guidance_wps = guidance_wps[num_truncate:]
 
             # use FOT planner
             initial_conditions = {
                 'ps': ps,
-                'target_speed': target_speed,
+                'target_speed': kmph_to_mps(target_speed),
                 'pos': np.array([pos.x, pos.y]),
-                'vel': np.array([vel.x, vel.y]),
+                'vel': np.array([kmph_to_mps(vel.x), kmph_to_mps(vel.y)]),
                 'wp': np.array([[pos.x, pos.y]] + guidance_wps),
                 'obs': np.array(obs)
             }
@@ -162,11 +160,11 @@ class Car():
                 new_loc = carla.Location(x=x, y=y, z=pos.z)
                 if pos.distance(new_loc) > WAYPOINT_THRESHOLD:
                     new_trajectory.append(new_loc)
-            if new_trajectory:
+            if success and new_trajectory:
                 trajectory = self.trajectory = new_trajectory
 
         if not trajectory: return STOP_CONTROL
-        ctrl = self.controller.run_step(self.vel, target_speed, pos, trajectory[0])
+        ctrl = (self.slow_controller if mps_to_kmph(self.vel.length()) < 10 else self.fast_controller).run_step(self.vel, target_speed, pos, trajectory[0])
         return ctrl
 
     def run_step(self):
