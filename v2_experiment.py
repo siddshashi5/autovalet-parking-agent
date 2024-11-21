@@ -44,6 +44,7 @@ def main():
         while not is_parked(car):
             world.tick()
             car.run_step()
+            print(car.iou())
             # town04_spectator_follow(world, car)
 
     except KeyboardInterrupt:

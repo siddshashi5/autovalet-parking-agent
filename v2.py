@@ -2,6 +2,7 @@ from enum import Enum
 import carla
 import numpy as np
 import networkx as nx
+from shapely import Polygon
 import lib.frenet_optimal_trajectory_planner.FrenetOptimalTrajectory.fot_wrapper as fot
 from v2_controller import VehiclePIDController
 
@@ -84,6 +85,45 @@ class CarlaCar():
 
     def destroy(self):
         self.actor.destroy()
+
+    def iou(self):
+        actor = self.actor
+        car_transform = actor.get_transform()
+        car_loc = car_transform.location
+        car_angle = car_transform.rotation.yaw
+        car_angle = np.deg2rad(actor.get_transform().rotation.yaw)
+        car_rotation = np.array([
+            [np.cos(car_angle), -np.sin(car_angle)],
+            [np.sin(car_angle), np.cos(car_angle)]
+        ])
+        car_bb = [
+            -actor.bounding_box.extent.x, -actor.bounding_box.extent.y,
+            actor.bounding_box.extent.x, actor.bounding_box.extent.y
+        ]
+        car_vertices = [
+            np.dot(car_rotation, np.array([car_bb[0], car_bb[1]])) + np.array([car_loc.x, car_loc.y]),
+            np.dot(car_rotation, np.array([car_bb[0], car_bb[3]])) + np.array([car_loc.x, car_loc.y]),
+            np.dot(car_rotation, np.array([car_bb[2], car_bb[3]])) + np.array([car_loc.x, car_loc.y]),
+            np.dot(car_rotation, np.array([car_bb[2], car_bb[1]])) + np.array([car_loc.x, car_loc.y])
+        ]
+        destination_bb = self.car.destination_bb
+        destination_vertices = [(destination_bb[0], destination_bb[1]), (destination_bb[0], destination_bb[3]), (destination_bb[2], destination_bb[3]), (destination_bb[2], destination_bb[1])]
+
+        # Debug bounding boxes
+        # self.world.debug.draw_string(carla.Location(x=car_vertices[0][0], y=car_vertices[0][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
+        # self.world.debug.draw_string(carla.Location(x=car_vertices[1][0], y=car_vertices[1][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
+        # self.world.debug.draw_string(carla.Location(x=car_vertices[2][0], y=car_vertices[2][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
+        # self.world.debug.draw_string(carla.Location(x=car_vertices[3][0], y=car_vertices[3][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
+
+        # self.world.debug.draw_string(carla.Location(x=destination_vertices[0][0], y=destination_vertices[0][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
+        # self.world.debug.draw_string(carla.Location(x=destination_vertices[1][0], y=destination_vertices[1][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
+        # self.world.debug.draw_string(carla.Location(x=destination_vertices[2][0], y=destination_vertices[2][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
+        # self.world.debug.draw_string(carla.Location(x=destination_vertices[3][0], y=destination_vertices[3][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
+
+        car_polygon = Polygon(car_vertices)
+        destination_polygon = Polygon(destination_vertices)
+        iou = car_polygon.intersection(destination_polygon).area / car_polygon.union(destination_polygon).area
+        return iou
 
 class Car():
     def __init__(self, pos, vel, destination, gnss_sensor):
