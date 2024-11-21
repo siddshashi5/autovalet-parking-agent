@@ -43,6 +43,7 @@ STOP_CONTROL = carla.VehicleControl(brake=1.0)
 class Mode(Enum):
     PARKING = 0
     PARKED = 1
+    FAILED = 2
 
 # TODO: get data from actual GNSS sensor instead of getting
 # perfect vehicle data from CARLA
@@ -143,7 +144,6 @@ class Car():
 
     def perceive(self):
         self.pos = self.gnss_sensor.get_location()
-        self.pos.x += 0.25
         self.vel = self.gnss_sensor.get_velocity()
         # TODO: get/update obstacles and lane waypoints from sensor data only,
         # adding data to graph as needed
@@ -180,8 +180,11 @@ class Car():
             # add additional guidance waypoints from parking spot
             # TODO: handle case where longer side is along different axis
             destination_bb = self.destination_bb
+            start_x, end_x = destination_bb[0] - 2, destination_bb[2]
+            if abs(start_x - guidance_wps[-1][0]) > abs(end_x - guidance_wps[-1][0]):
+                start_x, end_x = end_x + 2, start_x + 2
             for wp_x, wp_y in zip(
-                np.linspace(destination_bb[0] - 2, destination_bb[2], NUM_GUIDANCE_WPS).tolist(),
+                np.linspace(start_x, end_x, NUM_GUIDANCE_WPS).tolist(),
                 [(destination_bb[1] + destination_bb[3])/2] * NUM_GUIDANCE_WPS,
             ):
                 guidance_wps.append([wp_x, wp_y])
@@ -226,7 +229,7 @@ class Car():
             if success and new_trajectory:
                 trajectory = self.trajectory = new_trajectory
 
-        if not trajectory: return STOP_CONTROL
+        if not trajectory: self.mode = Mode.FAILED; return STOP_CONTROL
         ctrl = (self.slow_controller if mps_to_kmph(self.vel.length()) < SLOWDOWN_CONSTANT else self.fast_controller).run_step(self.vel, target_speed, pos, trajectory[0])
         return ctrl
 
