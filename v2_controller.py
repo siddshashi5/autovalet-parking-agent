@@ -19,7 +19,7 @@ def get_speed(vel):
     """
     return 3.6 * math.sqrt(vel.x ** 2 + vel.y ** 2 + vel.z ** 2)
 
-class VehiclePIDController():
+class VehiclePIDController:
     """
     VehiclePIDController is the combination of two PID controllers
     (lateral and longitudinal) to perform the
@@ -28,10 +28,11 @@ class VehiclePIDController():
 
 
     def __init__(self, args_lateral, args_longitudinal, offset=0, max_throttle=0.75, max_brake=0.3,
-                 max_steering=0.8):
+                 max_steering=1.0):
         """
         Constructor method.
 
+        :param vehicle: actor to apply to local planner logic onto
         :param args_lateral: dictionary of arguments to set the lateral PID controller
         using the following semantics:
             K_P -- Proportional term
@@ -55,21 +56,19 @@ class VehiclePIDController():
         self._lon_controller = PIDLongitudinalController(**args_longitudinal)
         self._lat_controller = PIDLateralController(offset, **args_lateral)
 
-    def run_step(self, current_vel, target_speed, current_loc, target_loc):
+    def run_step(self, current_vel, target_speed, current_transform, target_transform, is_reverse):
         """
         Execute one step of control invoking both lateral and longitudinal
         PID controllers to reach a target waypoint
         at a given target_speed.
 
-            :param current_vel: current vehicle velocity
             :param target_speed: desired vehicle speed
-            :param current_loc: current location encoded as a location
-            :param target_loc: target location encoded as a location
+            :param waypoint: target location encoded as a waypoint
             :return: distance (in meters) to the waypoint
         """
 
         acceleration = self._lon_controller.run_step(current_vel, target_speed)
-        current_steering = self._lat_controller.run_step(current_loc, current_vel, target_loc)
+        current_steering = self._lat_controller.run_step(current_transform, target_transform, is_reverse)
         control = carla.VehicleControl()
         if acceleration >= 0.0:
             control.throttle = min(acceleration, self.max_throt)
@@ -80,10 +79,10 @@ class VehiclePIDController():
 
         # Steering regulation: changes cannot happen abruptly, can't steer too much.
 
-        if current_steering > self.past_steering + 0.1:
-            current_steering = self.past_steering + 0.1
-        elif current_steering < self.past_steering - 0.1:
-            current_steering = self.past_steering - 0.1
+        # if current_steering > self.past_steering + 0.1:
+        #     current_steering = self.past_steering + 0.1
+        # elif current_steering < self.past_steering - 0.1:
+        #     current_steering = self.past_steering - 0.1
 
         if current_steering >= 0:
             steering = min(self.max_steer, current_steering)
@@ -94,6 +93,8 @@ class VehiclePIDController():
         control.hand_brake = False
         control.manual_gear_shift = False
         self.past_steering = steering
+        if is_reverse:
+            control.reverse = True
 
         return control
 
@@ -111,7 +112,7 @@ class VehiclePIDController():
         self._lat_controller.set_offset(offset)
 
 
-class PIDLongitudinalController():
+class PIDLongitudinalController:
     """
     PIDLongitudinalController implements longitudinal control using a PID.
     """
@@ -175,7 +176,8 @@ class PIDLongitudinalController():
         self._k_d = K_D
         self._dt = dt
 
-class PIDLateralController():
+
+class PIDLateralController:
     """
     PIDLateralController implements lateral control using a PID.
     """
@@ -199,53 +201,23 @@ class PIDLateralController():
         self._offset = offset
         self._e_buffer = deque(maxlen=10)
 
-    def run_step(self, current_loc, current_vel, target_loc):
+    def run_step(self, vehicle_transform, target_transform, is_reverse):
         """
         Execute one step of lateral control to steer
-        the vehicle towards a certain waypoin.
+        the vehicle towards a certain waypoint.
 
-            :param current_loc: current location
-            :param current_vel: current velocity
-            :param target_loc: target location
+            :param waypoint: target waypoint
             :return: steering control in the range [-1, 1] where:
             -1 maximum steering to left
             +1 maximum steering to right
         """
-        return self._pid_control(target_loc, current_loc, current_vel)
+        return self._pid_control(vehicle_transform, target_transform, is_reverse)
 
     def set_offset(self, offset):
         """Changes the offset"""
         self._offset = offset
 
-    def _pid_control(self, target_loc, vehicle_loc, vehicle_vel):
-        """
-        Estimate the steering angle of the vehicle based on the PID equations
-
-            :param target_loc: target location
-            :param vehicle_loc: current location of the vehicle
-            :param vehicle_vel: current velocity of the vehicle
-            :return: steering control in the range [-1, 1]
-        """
-        # Get the ego's location and forward vector
-        ego_loc = vehicle_loc
-        v_vec = vehicle_vel
-        v_vec = np.array([v_vec.x, v_vec.y, 0.0])
-
-        # Get the vector vehicle-target_wp
-        if self._offset != 0:
-            # Displace the wp to the side
-            print("non-zero offset not supported")
-            # w_tran = target_transform
-            # r_vec = w_tran.get_right_vector()
-            # w_loc = w_tran.location + carla.Location(x=self._offset*r_vec.x,
-            #                                              y=self._offset*r_vec.y)
-        else:
-            w_loc = target_loc
-
-        w_vec = np.array([w_loc.x - ego_loc.x,
-                          w_loc.y - ego_loc.y,
-                          0.0])
-
+    def dot(self, v_vec, w_vec):
         wv_linalg = np.linalg.norm(w_vec) * np.linalg.norm(v_vec)
         if wv_linalg == 0:
             _dot = 1
@@ -254,6 +226,53 @@ class PIDLateralController():
         _cross = np.cross(v_vec, w_vec)
         if _cross[2] < 0:
             _dot *= -1.0
+        return _dot
+
+    def _pid_control(self, vehicle_transform, target_transform, is_reverse):
+        """
+        Estimate the steering angle of the vehicle based on the PID equations
+
+            :param waypoint: target waypoint
+            :param vehicle_transform: current transform of the vehicle
+            :return: steering control in the range [-1, 1]
+        """
+        current_angle = np.deg2rad(vehicle_transform.rotation.yaw)
+        target_angle = np.deg2rad(target_transform.rotation.yaw)
+        ca_vec = np.array([math.cos(current_angle), math.sin(current_angle), 0.0])
+        ta_vec = np.array([math.cos(target_angle), math.sin(target_angle), 0.0])
+        dot_1 = self.dot(ca_vec, ta_vec)
+
+        # Get the ego's location and forward vector
+        ego_loc = vehicle_transform.location
+        if is_reverse:
+            ego_loc = np.array([ego_loc.x - 2*np.cos(current_angle), ego_loc.y - 2*np.sin(current_angle), 0.0])
+        else:
+            ego_loc = np.array([ego_loc.x + 2*np.cos(current_angle), ego_loc.y + 2*np.sin(current_angle), 0.0])
+
+        v_vec = vehicle_transform.get_forward_vector()
+        v_vec = np.array([v_vec.x, v_vec.y, 0.0])
+        if is_reverse:
+            v_vec *= -1
+
+        w_loc = target_transform.location
+        if is_reverse:
+            w_loc = np.array([w_loc.x - 2*np.cos(target_angle), w_loc.y - 2*np.sin(target_angle), 0.0])
+        else:
+            w_loc = np.array([w_loc.x + 2*np.cos(target_angle), w_loc.y + 2*np.sin(target_angle), 0.0])
+        w_vec = w_loc - ego_loc
+
+        dot_2 = self.dot(v_vec, w_vec)
+        if is_reverse:
+            dot_2 *= -1
+
+        # print(np.rad2deg(current_angle), np.rad2deg(target_angle))
+        # print(np.rad2deg(dot_1))
+        # print(np.rad2deg(dot_2))
+        _dot = 0.0 * dot_1 + 1.0 * dot_2
+        # print("Current angle: ", np.rad2deg(current_angle))
+        # print("Target angle: ", np.rad2deg(target_angle))
+        # print("Target angle (waypoint): ", np.rad2deg(np.atan2(w_vec[1], w_vec[0])))
+        # print(dot_1, dot_2)
 
         self._e_buffer.append(_dot)
         if len(self._e_buffer) >= 2:
@@ -263,7 +282,12 @@ class PIDLateralController():
             _de = 0.0
             _ie = 0.0
 
-        return np.clip((self._k_p * _dot) + (self._k_d * _de) + (self._k_i * _ie), -1.0, 1.0)
+        if is_reverse:
+            k_p, k_d, k_i = 0.5, 0.1, 0.0
+        else:
+            k_p, k_d, k_i = self._k_p, self._k_d, self._k_i
+        steer = np.clip((k_p * _dot) + (k_d * _de) + (k_i * _ie), -1.0, 1.0)
+        return steer
 
     def change_parameters(self, K_P, K_I, K_D, dt):
         """Changes the PID parameters"""
