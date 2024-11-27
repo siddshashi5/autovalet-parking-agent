@@ -56,7 +56,7 @@ class VehiclePIDController:
         self._lon_controller = PIDLongitudinalController(**args_longitudinal)
         self._lat_controller = PIDLateralController(offset, **args_lateral)
 
-    def run_step(self, current_speed, target_speed, cur, front_cur, back_cur, wp, front_wp, back_wp, is_reverse):
+    def run_step(self, cur_speed, target_speed, cur, wp, is_reverse):
         """
         Execute one step of control invoking both lateral and longitudinal
         PID controllers to reach a target waypoint
@@ -67,8 +67,8 @@ class VehiclePIDController:
             :return: distance (in meters) to the waypoint
         """
 
-        acceleration = self._lon_controller.run_step(current_speed, target_speed)
-        current_steering = self._lat_controller.run_step(cur, front_cur, back_cur, wp, front_wp, back_wp, is_reverse)
+        acceleration = self._lon_controller.run_step(cur_speed, target_speed)
+        current_steering = self._lat_controller.run_step(cur, wp, is_reverse)
         control = carla.VehicleControl()
         if acceleration >= 0.0:
             control.throttle = min(acceleration, self.max_throt)
@@ -199,7 +199,7 @@ class PIDLateralController:
         self._offset = offset
         self._e_buffer = deque(maxlen=10)
 
-    def run_step(self, cur, front_cur, back_cur, wp, front_wp, back_wp, is_reverse):
+    def run_step(self, cur, wp, is_reverse):
         """
         Execute one step of lateral control to steer
         the vehicle towards a certain waypoint.
@@ -209,24 +209,13 @@ class PIDLateralController:
             -1 maximum steering to left
             +1 maximum steering to right
         """
-        return self._pid_control(cur, front_cur, back_cur, wp, front_wp, back_wp, is_reverse)
+        return self._pid_control(cur, wp, is_reverse)
 
     def set_offset(self, offset):
         """Changes the offset"""
         self._offset = offset
 
-    def dot(self, v_vec, w_vec):
-        wv_linalg = np.linalg.norm(w_vec) * np.linalg.norm(v_vec)
-        if wv_linalg == 0:
-            _dot = 1
-        else:
-            _dot = math.acos(np.clip(np.dot(w_vec, v_vec) / (wv_linalg), -1.0, 1.0))
-        _cross = np.cross(v_vec, w_vec)
-        if _cross[2] < 0:
-            _dot *= -1.0
-        return _dot
-
-    def _pid_control(self, cur, front_cur, back_cur, wp, front_wp, back_wp, is_reverse):
+    def _pid_control(self, cur, wp, is_reverse):
         """
         Estimate the steering angle of the vehicle based on the PID equations
 
@@ -234,84 +223,24 @@ class PIDLateralController:
             :param vehicle_transform: current transform of the vehicle
             :return: steering control in the range [-1, 1]
         """
-        # Get the ego's location and forward vector
-        sign = -1 if is_reverse else 1
-        V = np.array([np.cos(cur.angle), np.sin(cur.angle), 0]) * sign
+        back_cur = cur.offset(-1) if not is_reverse else cur.offset(1)
 
-        Ego = np.array([
-            [cur.x, cur.y, 0],
-            [front_cur.x, front_cur.y, 0],
-            [back_cur.x, back_cur.y, 0]
-        ])
+        alpha = np.atan2(wp.y - back_cur.y, wp.x - back_cur.x) - cur.angle
+        delta = np.atan2(2.0 * 3.0 * np.sin(alpha) / np.sqrt((wp.x - back_cur.x) ** 2 + (wp.y - back_cur.y) ** 2), 1.0)
+        delta = np.clip(delta, -np.pi / 6, np.pi / 6)
+        delta /= np.pi / 6
 
-        W = np.array([
-            [wp.x, wp.y, 0],
-            [front_wp.x, front_wp.y, 0],
-            [back_wp.x, back_wp.y, 0]
-        ]) - Ego
+        # front_cur = cur.offset(1)
+        # front_wp = wp.offset(1)
+        # # heading_err = wp.angle - cur.angle
+        # heading_err = wp.angle - cur.angle
+        # cte = np.atan2(0.1 * np.sqrt((front_wp.x - front_cur.x) ** 2 + (front_wp.y - front_cur.y) ** 2), cur.speed)
+        # delta = heading_err + cte
+        # delta = np.arctan2(np.sin(delta), np.cos(delta))
+        # delta = np.clip(delta, -np.pi / 6, np.pi / 6)
+        # delta /= np.pi / 6
 
-        dot_1 = self.dot(V, W[0]) * sign
-        dot_2 = self.dot(V, W[1]) * sign
-        dot_3 = self.dot(V, W[2]) * sign
-
-        if is_reverse:
-            _dot = dot_1 + dot_3
-        else:
-            _dot = dot_1 + dot_2
-
-        # ego_loc = vehicle_transform.location
-        # ego_loc = np.array([ego_loc.x, ego_loc.y, 0.0])
-
-        # v_vec = vehicle_transform.get_forward_vector()
-        # v_vec = np.array([v_vec.x, v_vec.y, 0.0])
-        # if is_reverse:
-        #     v_vec *= -1
-
-        # w_loc = target_transform.location
-        # w_loc = np.array([w_loc.x, w_loc.y, 0.0])
-        # w_vec = w_loc - ego_loc
-
-        # dot_2 = self.dot(v_vec, w_vec)
-        # if is_reverse:
-        #     dot_2 *= -1
-
-        # ego_loc_offset = offset_vehicle_transform.location
-        # ego_loc_offset = np.array([ego_loc_offset.x, ego_loc_offset.y, 0.0])
-        # v_vec_offset = offset_vehicle_transform.get_forward_vector()
-        # v_vec_offset = np.array([v_vec_offset.x, v_vec_offset.y, 0.0])
-        # if is_reverse:
-        #     v_vec_offset *= -1
-        # w_loc_offset = offset_target_transform.location
-        # w_loc_offset = np.array([w_loc_offset.x, w_loc_offset.y, 0.0])
-        # w_vec_offset = w_loc_offset - ego_loc_offset
-        # dot_2_offset = self.dot(v_vec_offset, w_vec_offset)
-        # if is_reverse:
-        #     dot_2_offset *= -1
-
-        # print(np.rad2deg(current_angle), np.rad2deg(target_angle))
-        # print(np.rad2deg(dot_1))
-        # print(np.rad2deg(dot_2))
-        # _dot = 0.0 * dot_1 + 1.0 * dot_2 + 0.0 * dot_2_offset
-        # _dot = dot_2 + dot_2_offset
-        # print("Current angle: ", np.rad2deg(current_angle))
-        # print("Target angle: ", np.rad2deg(target_angle))
-        # print("Target angle (waypoint): ", np.rad2deg(np.atan2(w_vec[1], w_vec[0])))
-        # print(dot_1, dot_2)
-
-        self._e_buffer.append(_dot)
-        if len(self._e_buffer) >= 2:
-            _de = (self._e_buffer[-1] - self._e_buffer[-2]) / self._dt
-            _ie = sum(self._e_buffer) * self._dt
-        else:
-            _de = 0.0
-            _ie = 0.0
-
-        if is_reverse:
-            k_p, k_d, k_i = 0.8, 0.2, 0.0
-        else:
-            k_p, k_d, k_i = 0.8, 0.2, 0.0
-        steer = np.clip((k_p * _dot) + (k_d * _de) + (k_i * _ie), -1.0, 1.0)
-        return steer
+        return delta
 
     def change_parameters(self, K_P, K_I, K_D, dt):
         """Changes the PID parameters"""

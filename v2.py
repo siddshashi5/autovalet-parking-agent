@@ -16,7 +16,7 @@ DESTINATION_THRESHOLD = 0.2
 WAYPOINT_THRESHOLD = 0.5
 MAX_ACCELERATION = 1
 MAX_SPEED = kmph_to_mps(10)
-MIN_SPEED = kmph_to_mps(1)
+MIN_SPEED = kmph_to_mps(2)
 STOP_CONTROL = carla.VehicleControl(brake=1.0)
 
 class Mode(Enum):
@@ -122,7 +122,7 @@ def refine_trajectory(trajectory: list[TrajectoryPoint]):
             d = trajectory[i-1].distance(trajectory[i])
             trajectory[i].speed = min(trajectory[i].speed, sqrt(trajectory[i+1].speed**2 + 2 * MAX_ACCELERATION * d))
 
-def plan_hybrid_astar(cur: TrajectoryPoint, destination: TrajectoryPoint, obs: list[list[float]]) -> list[Tuple[TrajectoryPoint, TrajectoryPoint, TrajectoryPoint]]:
+def plan_hybrid_astar(cur: TrajectoryPoint, destination: TrajectoryPoint, obs: list[list[float]]) -> list[TrajectoryPoint]:
     # use Hybrid A* planner
     initial_conditions = {
         'start': np.array([cur.x, cur.y, cur.angle]),
@@ -151,7 +151,7 @@ def plan_hybrid_astar(cur: TrajectoryPoint, destination: TrajectoryPoint, obs: l
     # plot start, end, and obstacles
     hybrid_astar_path = hybrid_astar(initial_conditions['start'], initial_conditions['end'], ox, oy, 2.0, np.deg2rad(15.0))
     if not hybrid_astar_path:
-        initial_conditions['end'][2] *= -1
+        initial_conditions['end'][2] += np.pi
         hybrid_astar_path = hybrid_astar(initial_conditions['start'], initial_conditions['end'], ox, oy, 2.0, np.deg2rad(15.0))
         if not hybrid_astar_path:
             return []
@@ -169,7 +169,7 @@ def plan_hybrid_astar(cur: TrajectoryPoint, destination: TrajectoryPoint, obs: l
     new_trajectory = []
     for wp in trajectory:
         if cur.distance(wp) > WAYPOINT_THRESHOLD:
-            new_trajectory.append((wp, wp.offset(), wp.offset(-1)))
+            new_trajectory.append(wp)
     
     return new_trajectory
 
@@ -214,12 +214,8 @@ class CarlaCar():
     def debug_step(self):
         cur = self.car.cur
         self.world.debug.draw_string(carla.Location(x=cur.x, y=cur.y), 'X', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
-        self.world.debug.draw_string(carla.Location(x=cur.offset().x, y=cur.offset().y), 'X', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
-        self.world.debug.draw_string(carla.Location(x=cur.offset(-1).x, y=cur.offset(-1).y), 'X', draw_shadow=False, color=carla.Color(r=0, g=0, b=255), life_time=1.0, persistent_lines=True)
-        for loc, front_loc, back_loc in self.car.trajectory:
+        for loc in self.car.trajectory:
             self.world.debug.draw_string(carla.Location(x=loc.x, y=loc.y), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
-            self.world.debug.draw_string(carla.Location(x=front_loc.x, y=front_loc.y), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
-            self.world.debug.draw_string(carla.Location(x=back_loc.x, y=back_loc.y), 'o', draw_shadow=False, color=carla.Color(r=0, g=0, b=255), life_time=1.0, persistent_lines=True)
 
     def destroy(self):
         self.actor.destroy()
@@ -267,10 +263,10 @@ class Car():
     def __init__(self, destination: Tuple[float, float], gnss_sensor: CarlaGnssSensor):
         self.cur = TrajectoryPoint(Direction.FORWARD, 0, 0, 0, 0)
         self.obs: list[list[float]] = []
-        self.destination = TrajectoryPoint(Direction.FORWARD, destination[0], destination[1], 0, np.deg2rad(0))
+        self.destination = TrajectoryPoint(Direction.FORWARD, destination[0], destination[1], 0, 0)
         self.controller = VehiclePIDController({'K_P': 2, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 0.5, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05})
         self.gnss_sensor = gnss_sensor
-        self.trajectory: list[Tuple[TrajectoryPoint, TrajectoryPoint, TrajectoryPoint]] = []
+        self.trajectory: list[TrajectoryPoint] = []
         self.mode = Mode.DRIVING
 
     def perceive(self):
@@ -285,8 +281,6 @@ class Car():
         # if we're at destination, stop
         # TODO: also stop if unexpected obstacle detected
         cur = self.cur
-        front_cur = cur.offset(1)
-        back_cur = cur.offset(-1)
         destination = self.destination
         distance_to_destination = cur.distance(destination)
         if self.mode == Mode.PARKED or distance_to_destination < DESTINATION_THRESHOLD:
@@ -300,11 +294,8 @@ class Car():
         # remove visited points from trajectory
         trajectory = self.trajectory
         num_to_remove = 0
-        for loc, front_loc, back_loc in trajectory[:-1]:
-            if (
-                cur.direction == Direction.REVERSE and cur.distance(loc) < WAYPOINT_THRESHOLD and back_cur.distance(back_loc) < WAYPOINT_THRESHOLD or
-                cur.direction == Direction.FORWARD and cur.distance(loc) < WAYPOINT_THRESHOLD and front_cur.distance(front_loc) < WAYPOINT_THRESHOLD
-            ):
+        for loc in trajectory[:-1]:
+            if cur.distance(loc) < WAYPOINT_THRESHOLD:
                 num_to_remove += 1
             else:
                 break
@@ -313,7 +304,7 @@ class Car():
 
         # replan trajectory if needed
         should_extend = len(trajectory) == 0
-        should_fix = len(trajectory) > 0 and (cur.distance(trajectory[0][0]) > 2 or front_cur.distance(trajectory[0][1]) > 2 or back_cur.distance(trajectory[0][2]) > 2)
+        should_fix = len(trajectory) > 0 and cur.distance(trajectory[0]) > 2
         if should_extend or should_fix:
             new_trajectory = plan_hybrid_astar(cur, destination, self.obs)
             if new_trajectory:
@@ -322,17 +313,13 @@ class Car():
         if not trajectory: self.mode = Mode.FAILED; return STOP_CONTROL
 
         # check if the next waypoint is behind us, in which case we need to reverse
-        wp, front_wp, back_wp = trajectory[0]
+        wp = trajectory[0]
         cur.direction = wp.direction
         ctrl = self.controller.run_step(
             mps_to_kmph(cur.speed),
             mps_to_kmph(wp.speed),
             cur,
-            front_cur,
-            back_cur,
             wp,
-            front_wp,
-            back_wp,
             wp.direction == Direction.REVERSE
         )
         return ctrl
