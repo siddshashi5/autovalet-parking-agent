@@ -18,8 +18,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 SCENARIOS = [
-    (25, [24, 26]),
     (17, [16, 18]),
+    (25, [24, 26]),
     (18, [17, 19]),
     (19, [18, 20]),
     (35, [34, 36]),
@@ -70,6 +70,7 @@ def main():
             run_scenario(world, destination_parking_spot, parked_spots, ious)
 
         # graph ious
+        plt.clf()
         plt.boxplot(ious, positions=[1], vert=True, patch_artist=True, widths=0.5,
             boxprops=dict(facecolor='lightblue', color='blue'),
             medianprops=dict(color='red'))

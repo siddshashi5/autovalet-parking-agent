@@ -64,7 +64,7 @@ def town04_load(client):
 def town04_spawn_ego_vehicle(world, destination_parking_spot):
     destination_parking_spot_loc = parking_vehicle_locations_Town04[destination_parking_spot]
     blueprint = world.get_blueprint_library().filter(EGO_VEHICLE)[0]
-    return CarlaCar(world, blueprint, player_location_Town04, approximate_bb_from_center(destination_parking_spot_loc), debug=DEBUG)
+    return CarlaCar(world, blueprint, player_location_Town04, destination_parking_spot_loc, approximate_bb_from_center(destination_parking_spot_loc), debug=DEBUG)
 
 def town04_spawn_parked_cars(world, spawn_points, skip):
     blueprints = world.get_blueprint_library().filter('vehicle.*.*')

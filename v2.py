@@ -1,9 +1,9 @@
 from math import sqrt
 from enum import Enum
+from typing import Tuple
 import carla
 import numpy as np
 import matplotlib.pyplot as plt
-import networkx as nx
 from shapely import Polygon
 import lib.frenet_optimal_trajectory_planner.FrenetOptimalTrajectory.fot_wrapper as fot
 from hybrid_a_star.hybrid_a_star import hybrid_a_star_planning as hybrid_astar
@@ -11,37 +11,12 @@ from v2_controller import VehiclePIDController
 
 def kmph_to_mps(speed): return speed/3.6
 def mps_to_kmph(speed): return speed*3.6
-FOT_HYPERPARAMETERS = {
-    "max_speed": kmph_to_mps(15.0),
-    "max_accel": 15.0,
-    "max_curvature": 15.0,
-    "max_road_width_l": 3.0,
-    "max_road_width_r": 3.0,
-    "d_road_w": 0.5,
-    "dt": 0.2,
-    "maxt": 10.0,
-    "mint": 5.0,
-    "d_t_s": 0.5,
-    "n_s_sample": 1.0,
-    "obstacle_clearance": 0.2,
-    "kd": 1.0,
-    "kv": 0.1,
-    "ka": 0.1,
-    "kj": 0.1,
-    "kt": 0.1,
-    "ko": 0.1,
-    "klat": 1.0,
-    "klon": 1.0,
-    "num_threads": 4,
-}
-DESTINATION_THRESHOLD = 0.5
+
+DESTINATION_THRESHOLD = 0.2
 WAYPOINT_THRESHOLD = 0.5
-REPLAN_THRESHOLD = 5
 MAX_ACCELERATION = 1
-MAX_SPEED = kmph_to_mps(15)
+MAX_SPEED = kmph_to_mps(10)
 MIN_SPEED = kmph_to_mps(1)
-SLOWDOWN_CONSTANT = 10
-NUM_GUIDANCE_WPS = 6
 STOP_CONTROL = carla.VehicleControl(brake=1.0)
 
 class Mode(Enum):
@@ -101,19 +76,17 @@ class TrajectoryPoint():
     def distance(self, other):
         return sqrt((self.x - other.x)**2 + (self.y - other.y)**2)
 
-    def offset(self, is_reversing):
-        if is_reversing:
-            return TrajectoryPoint(self.direction, self.x - 2*np.cos(self.angle), self.y - 2*np.sin(self.angle), self.speed, self.angle)
-        return TrajectoryPoint(self.direction, self.x + 2*np.cos(self.angle), self.y + 2*np.sin(self.angle), self.speed, self.angle)
+    def offset(self, sign: int = 1):
+        return TrajectoryPoint(self.direction, self.x + 2*sign*np.cos(self.angle), self.y + 2*sign*np.sin(self.angle), self.speed, self.angle)
 
-def refine_trajectory(trajectory: list[TrajectoryPoint], direction: Direction, heading: float):
+def refine_trajectory(trajectory: list[TrajectoryPoint]):
     if len(trajectory) == 0: return
 
     # find direction changes based on positions
     segments = [0]
-    cur_direction = direction
-    forward_vec_x = np.cos(heading)
-    forward_vec_y = np.sin(heading)
+    cur_direction = trajectory[0].direction
+    forward_vec_x = np.cos(trajectory[0].angle)
+    forward_vec_y = np.sin(trajectory[0].angle)
     if cur_direction == Direction.REVERSE:
         forward_vec_x = -forward_vec_x
         forward_vec_y = -forward_vec_y
@@ -149,38 +122,11 @@ def refine_trajectory(trajectory: list[TrajectoryPoint], direction: Direction, h
             d = trajectory[i-1].distance(trajectory[i])
             trajectory[i].speed = min(trajectory[i].speed, sqrt(trajectory[i+1].speed**2 + 2 * MAX_ACCELERATION * d))
 
-def plan_fot(ps, pos, vel, guidance_wps, obs, direction, heading):
-    # use FOT planner
-    initial_conditions = {
-        'ps': ps,
-        'target_speed': MAX_SPEED,
-        'pos': np.array([pos.x, pos.y]),
-        'vel': np.array([vel.x, vel.y]),
-        'wp': np.array(guidance_wps),
-        'obs': np.array(obs)
-    }
-    result_x, result_y, speeds, ix, iy, result_yaw, d, s, speeds_x, speeds_y, \
-        misc, costs, success = fot.run_fot(initial_conditions, FOT_HYPERPARAMETERS)
-    if not success: return [], 0
-
-    # generate trajectory points
-    trajectory = [TrajectoryPoint(Direction.FORWARD, x, y, MAX_SPEED, yaw if direction == Direction.FORWARD else -yaw) for x, y, yaw in zip(result_x, result_y, result_yaw)]
-    trajectory[0].speed = vel.length()
-    refine_trajectory(trajectory, direction, heading)
-
-    # remove points that are too close
-    new_trajectory = []
-    for wp in trajectory:
-        if pos.distance(wp) > WAYPOINT_THRESHOLD:
-            new_trajectory.append(wp)
-
-    return new_trajectory, misc['s']
-
-def plan_hybrid_astar(pos, vel, direction, heading, destination, obs):
+def plan_hybrid_astar(cur: TrajectoryPoint, destination: TrajectoryPoint, obs: list[list[float]]) -> list[Tuple[TrajectoryPoint, TrajectoryPoint, TrajectoryPoint]]:
     # use Hybrid A* planner
     initial_conditions = {
-        'start': np.array([pos.x, pos.y, heading]),
-        'end': np.array([destination.x, destination.y, np.deg2rad(180)]),
+        'start': np.array([cur.x, cur.y, cur.angle]),
+        'end': np.array([destination.x, destination.y, destination.angle]),
         'obs': np.array(obs)
     }
     ox = []
@@ -204,35 +150,26 @@ def plan_hybrid_astar(pos, vel, direction, heading, destination, obs):
 
     # plot start, end, and obstacles
     hybrid_astar_path = hybrid_astar(initial_conditions['start'], initial_conditions['end'], ox, oy, 2.0, np.deg2rad(15.0))
+    if not hybrid_astar_path:
+        initial_conditions['end'][2] *= -1
+        hybrid_astar_path = hybrid_astar(initial_conditions['start'], initial_conditions['end'], ox, oy, 2.0, np.deg2rad(15.0))
+        if not hybrid_astar_path:
+            return []
     result_x = hybrid_astar_path.x_list
     result_y = hybrid_astar_path.y_list
     result_yaw = hybrid_astar_path.yaw_list
 
-    import matplotlib.pyplot as plt
-    from hybrid_a_star.car import plot_car
-    plt.cla()
-    plt.plot(ox, oy, ".k")
-    plt.plot(result_x, result_y, "-r", label="Hybrid A* path")
-    plt.grid(True)
-    plt.axis("equal")
-    c = 0
-    for i_x, i_y, i_yaw in zip(result_x, result_y, hybrid_astar_path.yaw_list):
-        if c % 5 == 0:
-            plot_car(i_x, i_y, i_yaw)
-        c += 1
-    plt.savefig('test-2.png')
-    # assert False
-
     # generate trajectory points
-    trajectory = [TrajectoryPoint(Direction.FORWARD, x, y, MIN_SPEED, yaw) for x, y, yaw in zip(result_x, result_y, result_yaw)]
-    trajectory[0].speed = vel.length()
-    refine_trajectory(trajectory, direction, heading)
+    trajectory = [TrajectoryPoint(cur.direction, x, y, MIN_SPEED, yaw) for x, y, yaw in zip(result_x, result_y, result_yaw)]
+    trajectory[0].speed = cur.speed
+    trajectory[0].angle = cur.angle
+    refine_trajectory(trajectory)
 
     # remove points that are too close
     new_trajectory = []
     for wp in trajectory:
-        if pos.distance(wp) > WAYPOINT_THRESHOLD:
-            new_trajectory.append(wp)
+        if cur.distance(wp) > WAYPOINT_THRESHOLD:
+            new_trajectory.append((wp, wp.offset(), wp.offset(-1)))
     
     return new_trajectory
 
@@ -242,27 +179,28 @@ class CarlaGnssSensor():
     def __init__(self, actor):
         self.actor = actor
 
-    def get_location(self) -> list[float]:
+    def get_location(self) -> Tuple[float, float]:
         loc = self.actor.get_location()
-        return [loc.x, loc.y]
+        return loc.x, loc.y
 
-    def get_velocity(self) -> list[float]:
+    def get_speed(self) -> float:
         vel = self.actor.get_velocity()
-        return [vel.x, vel.y]
+        return vel.length()
     
     def get_heading(self):
         return np.deg2rad(self.actor.get_transform().rotation.yaw)
 
 class CarlaCar():
-    def __init__(self, world, blueprint, spawn_point, destination, debug=False):
+    def __init__(self, world, blueprint, spawn_point, destination, destination_bb, debug=False):
         self.world = world
         self.actor = world.spawn_actor(blueprint, spawn_point)
         self.gnss_sensor = CarlaGnssSensor(self.actor)
-        self.car = Car(self.actor.get_location(), self.actor.get_velocity(), destination, self.gnss_sensor)
+        self.car = Car((destination.x, destination.y), self.gnss_sensor)
+        self.destination_bb = destination_bb
 
         self.debug = debug
         if debug:
-            self.debug_init(spawn_point, self.car.destination)
+            self.debug_init(spawn_point, destination)
 
     def run_step(self):
         self.actor.apply_control(self.car.run_step())
@@ -274,11 +212,14 @@ class CarlaCar():
         self.world.debug.draw_string(destination, 'end', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
 
     def debug_step(self):
-        self.world.debug.draw_string(self.car.pos, 'X', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
-        for loc in self.car.trajectory:
+        cur = self.car.cur
+        self.world.debug.draw_string(carla.Location(x=cur.x, y=cur.y), 'X', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
+        self.world.debug.draw_string(carla.Location(x=cur.offset().x, y=cur.offset().y), 'X', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
+        self.world.debug.draw_string(carla.Location(x=cur.offset(-1).x, y=cur.offset(-1).y), 'X', draw_shadow=False, color=carla.Color(r=0, g=0, b=255), life_time=1.0, persistent_lines=True)
+        for loc, front_loc, back_loc in self.car.trajectory:
             self.world.debug.draw_string(carla.Location(x=loc.x, y=loc.y), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
-        for pt in self.car.guidance_wps:
-            self.world.debug.draw_string(carla.Location(x=pt[0], y=pt[1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=255, b=0), life_time=1.0, persistent_lines=True)
+            self.world.debug.draw_string(carla.Location(x=front_loc.x, y=front_loc.y), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
+            self.world.debug.draw_string(carla.Location(x=back_loc.x, y=back_loc.y), 'o', draw_shadow=False, color=carla.Color(r=0, g=0, b=255), life_time=1.0, persistent_lines=True)
 
     def destroy(self):
         self.actor.destroy()
@@ -303,7 +244,7 @@ class CarlaCar():
             np.dot(car_rotation, np.array([car_bb[2], car_bb[3]])) + np.array([car_loc.x, car_loc.y]),
             np.dot(car_rotation, np.array([car_bb[2], car_bb[1]])) + np.array([car_loc.x, car_loc.y])
         ]
-        destination_bb = self.car.destination_bb
+        destination_bb = self.destination_bb
         destination_vertices = [(destination_bb[0], destination_bb[1]), (destination_bb[0], destination_bb[3]), (destination_bb[2], destination_bb[3]), (destination_bb[2], destination_bb[1])]
 
         # Debug bounding boxes
@@ -323,23 +264,19 @@ class CarlaCar():
         return iou
 
 class Car():
-    def __init__(self, destination: list[float], gnss_sensor: CarlaGnssSensor):
-        self.heading: float = 0
-        self.cur = TrajectoryPoint(Direction.REVERSE, 0, 0, 0, 0)
-        self.ps: float = 0
+    def __init__(self, destination: Tuple[float, float], gnss_sensor: CarlaGnssSensor):
+        self.cur = TrajectoryPoint(Direction.FORWARD, 0, 0, 0, 0)
         self.obs: list[list[float]] = []
-        self.destination = TrajectoryPoint(Direction.REVERSE, destination[0], destination[1], 0, 0)
-        self.controller = VehiclePIDController({'K_P': 2, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 1.0, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05})
+        self.destination = TrajectoryPoint(Direction.FORWARD, destination[0], destination[1], 0, np.deg2rad(0))
+        self.controller = VehiclePIDController({'K_P': 2, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 0.5, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05})
         self.gnss_sensor = gnss_sensor
-        self.trajectory: list[TrajectoryPoint] = []
+        self.trajectory: list[Tuple[TrajectoryPoint, TrajectoryPoint, TrajectoryPoint]] = []
         self.mode = Mode.DRIVING
-        self.direction = Direction.REVERSE
 
     def perceive(self):
         self.cur.x, self.cur.y = self.gnss_sensor.get_location()
-        self.pos = self.gnss_sensor.get_location()
-        self.vel = self.gnss_sensor.get_velocity()
-        self.heading = self.gnss_sensor.get_heading()
+        self.cur.speed = self.gnss_sensor.get_speed()
+        self.cur.angle = self.gnss_sensor.get_heading()
         # TODO: get/update obstacles and lane waypoints from sensor data only,
         # adding data to graph as needed
 
@@ -347,9 +284,11 @@ class Car():
         # TODO: handle planning for exploration phase
         # if we're at destination, stop
         # TODO: also stop if unexpected obstacle detected
-        pos = self.pos
+        cur = self.cur
+        front_cur = cur.offset(1)
+        back_cur = cur.offset(-1)
         destination = self.destination
-        distance_to_destination = distance(pos, destination)
+        distance_to_destination = cur.distance(destination)
         if self.mode == Mode.PARKED or distance_to_destination < DESTINATION_THRESHOLD:
             self.mode = Mode.PARKED
             return STOP_CONTROL
@@ -358,29 +297,14 @@ class Car():
         if self.mode == Mode.DRIVING and distance_to_destination < 25:
             self.mode = Mode.PARKING
 
-        # plan guidance wps if needed
-        guidance_wps = self.guidance_wps
-        lane_wps = self.lane_wps
-        if not guidance_wps:
-            # find closest waypoints to pos and destination
-            pos_lane_wp = min(range(len(lane_wps)), key=lambda i: pos.distance(carla.Location(x=lane_wps[i][0], y=lane_wps[i][1])))
-            destination_lane_wp = min(range(len(lane_wps)), key=lambda i: destination.distance(carla.Location(x=lane_wps[i][0], y=lane_wps[i][1])))
-
-            # find shortest path
-            G = nx.Graph()
-            for i, waypoint in enumerate(lane_wps):
-                G.add_node(i, pos=(waypoint[0], waypoint[1]))
-            for i in range(len(lane_wps) - 1):
-                G.add_edge(i, i + 1)
-            guidance_wps.append([pos.x, pos.y])
-            for wp in map(lambda i: lane_wps[i], nx.shortest_path(G, source=pos_lane_wp, target=destination_lane_wp)):
-                guidance_wps.append(wp)
-
         # remove visited points from trajectory
         trajectory = self.trajectory
         num_to_remove = 0
-        for loc in trajectory:
-            if distance(pos, loc) < WAYPOINT_THRESHOLD:
+        for loc, front_loc, back_loc in trajectory[:-1]:
+            if (
+                cur.direction == Direction.REVERSE and cur.distance(loc) < WAYPOINT_THRESHOLD and back_cur.distance(back_loc) < WAYPOINT_THRESHOLD or
+                cur.direction == Direction.FORWARD and cur.distance(loc) < WAYPOINT_THRESHOLD and front_cur.distance(front_loc) < WAYPOINT_THRESHOLD
+            ):
                 num_to_remove += 1
             else:
                 break
@@ -388,70 +312,29 @@ class Car():
             trajectory = self.trajectory = trajectory[num_to_remove:]
 
         # replan trajectory if needed
-        # if the trajectory is too small and doesn't end at the destination, replan (to extend)
-        # if the trajectory is too far, replan (to fix)
-        should_extend = len(trajectory) < REPLAN_THRESHOLD and (len(trajectory) == 0 or distance(destination, trajectory[-1]) > DESTINATION_THRESHOLD)
-        should_fix = len(trajectory) > 0 and distance(pos, trajectory[0]) > 2
+        should_extend = len(trajectory) == 0
+        should_fix = len(trajectory) > 0 and (cur.distance(trajectory[0][0]) > 2 or front_cur.distance(trajectory[0][1]) > 2 or back_cur.distance(trajectory[0][2]) > 2)
         if should_extend or should_fix:
-            if self.mode == Mode.DRIVING:
-                new_trajectory, new_ps = plan_fot(self.ps, pos, self.vel, guidance_wps, self.obs, self.direction, self.heading)
-                if new_trajectory:
-                    self.ps = new_ps
-                    trajectory = self.trajectory = new_trajectory
-            elif self.mode == Mode.PARKING:
-                new_trajectory = plan_hybrid_astar(pos, self.vel, self.direction, self.heading, destination, self.obs)
-                if new_trajectory:
-                    trajectory = self.trajectory = new_trajectory
-            plot_trajectory(trajectory)
+            new_trajectory = plan_hybrid_astar(cur, destination, self.obs)
+            if new_trajectory:
+                trajectory = self.trajectory = new_trajectory
+            # plot_trajectory(trajectory)
         if not trajectory: self.mode = Mode.FAILED; return STOP_CONTROL
 
         # check if the next waypoint is behind us, in which case we need to reverse
-        wp = trajectory[0]
-        self.direction = wp.direction
-        ctrl = self.slow_controller.run_step(
-            self.vel,
+        wp, front_wp, back_wp = trajectory[0]
+        cur.direction = wp.direction
+        ctrl = self.controller.run_step(
+            mps_to_kmph(cur.speed),
             mps_to_kmph(wp.speed),
-            carla.Transform(location=carla.Location(x=pos.x, y=pos.y), rotation=carla.Rotation(yaw=np.rad2deg(self.heading))),
-            carla.Transform(location=carla.Location(x=wp.x, y=wp.y), rotation=carla.Rotation(yaw=np.rad2deg(wp.angle))),
+            cur,
+            front_cur,
+            back_cur,
+            wp,
+            front_wp,
+            back_wp,
             wp.direction == Direction.REVERSE
         )
-        # if wp.direction == Direction.REVERSE:
-        #     ctrl.steer = -ctrl.steer
-        #     ctrl.reverse = True
-        return ctrl
-
-    def asdfasdf(self):
-        if self.bruh > 0:
-            self.bruh -= 1
-            return STOP_CONTROL
-        next_wp = trajectory[0]
-        vel = self.vel
-        next_wp_vec = np.array([next_wp.x - pos.x, next_wp.y - pos.y])
-        next_wp_vec /= np.linalg.norm(next_wp_vec)
-        forward_vec = np.array([np.cos(np.deg2rad(self.heading)), np.sin(np.deg2rad(self.heading))])
-        if self.reversing and np.dot(next_wp_vec, forward_vec) > 0.5:
-            print("FORWARDING")
-            self.reversing = False
-            self.bruh = 10
-            return STOP_CONTROL
-        if not self.reversing and np.dot(next_wp_vec, forward_vec) < -0.5:
-            print("REVERSING")
-            self.reversing = True
-            self.bruh = 10
-            return STOP_CONTROL
-        if self.reversing:
-            # offset pos to be rear axles
-            # ctrl = self.reverse_controller.run_step(carla.Vector3D(x=vel.x, y=vel.y), target_speed, pos, trajectory[0])
-            next_wp = carla.Location(x=next_wp.x - 0.5*forward_vec[0], y=next_wp.y - 0.5*forward_vec[1])
-            ctrl = self.reverse_controller.run_step(carla.Vector3D(x=vel.x, y=vel.y), target_speed, pos, next_wp)
-            ctrl.steer = -ctrl.steer
-            print(ctrl.steer)
-            ctrl.reverse = True
-        else:
-            next_wp = carla.Location(x=next_wp.x + 0.5*forward_vec[0], y=next_wp.y + 0.5*forward_vec[1])
-            # ctrl = (self.slow_controller if mps_to_kmph(self.vel.length()) < SLOWDOWN_CONSTANT else self.fast_controller).run_step(self.vel, target_speed, pos, trajectory[0])
-            ctrl = (self.slow_controller if mps_to_kmph(self.vel.length()) < SLOWDOWN_CONSTANT else self.fast_controller).run_step(self.vel, target_speed, pos, next_wp)
-
         return ctrl
 
     def run_step(self):
