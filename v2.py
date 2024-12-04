@@ -202,10 +202,6 @@ class CarlaCar():
     def run_step(self):
         self.actor.apply_control(self.car.run_step())
 
-        if self.recording_file:
-            while not self.frames.empty():
-                self.process_recording_frame(self.frames.get())
-
         if self.debug:
             self.debug_step()
         
@@ -225,36 +221,38 @@ class CarlaCar():
         cam.listen(lambda image: self.frames.put(image))
         return cam
     
-    def process_recording_frame(self, image):
-        if self.has_recorded_segment and self.car.mode == Mode.PARKED:
-            return
-        self.has_recorded_segment = False
-        recording_file = self.recording_file
-        data = np.frombuffer(image.raw_data, dtype=np.uint8).reshape((image.height, image.width, 4))
-        data = data[:, :, :3].copy()
-        data = cv2.putText(
-            data,
-            "autonomous, 3x speed",
-            (20, image.height - 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            fontScale=1,
-            color=(255, 255, 255),
-            thickness=2
-        )
-        data = cv2.putText(
-            data,
-            "IOU: {:.2f}".format(self.iou()),
-            (image.width - 175, image.height - 40),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            fontScale=1,
-            color=(255, 255, 255),
-            thickness=2
-        )
-        recording_file.write_frame(data, pixel_format='bgr24')
-        if self.car.mode == Mode.PARKED:
-            self.has_recorded_segment = True
-            for _ in range(30):
-                recording_file.write_frame(data, pixel_format='bgr24')
+    def process_recording_frames(self):
+        while not self.frames.empty():
+            if self.has_recorded_segment and self.car.mode == Mode.PARKED:
+                return
+            image = self.frames.get()
+            self.has_recorded_segment = False
+            recording_file = self.recording_file
+            data = np.frombuffer(image.raw_data, dtype=np.uint8).reshape((image.height, image.width, 4))
+            data = data[:, :, :3].copy()
+            data = cv2.putText(
+                data,
+                "autonomous, 3x speed",
+                (20, image.height - 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                fontScale=1,
+                color=(255, 255, 255),
+                thickness=2
+            )
+            data = cv2.putText(
+                data,
+                "IOU: {:.2f}".format(self.iou()),
+                (image.width - 175, image.height - 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                fontScale=1,
+                color=(255, 255, 255),
+                thickness=2
+            )
+            recording_file.write_frame(data, pixel_format='bgr24')
+            if self.car.mode == Mode.PARKED:
+                self.has_recorded_segment = True
+                for _ in range(15):
+                    recording_file.write_frame(data, pixel_format='bgr24')
     
     def debug_init(self, spawn_point, destination):
         self.world.debug.draw_string(spawn_point.location, 'start', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)

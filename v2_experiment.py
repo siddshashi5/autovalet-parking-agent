@@ -69,9 +69,11 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_
         car.car.lane_wps = parking_lane_waypoints_Town04
 
         # run simulation
+        i = 0
         while not is_done(car):
             world.tick()
             car.run_step()
+            car.process_recording_frames()
             # town04_spectator_follow(world, car)
 
         iou = car.iou()
@@ -95,7 +97,7 @@ def main():
 
         # load recording file
         recording_file = iio.imopen('./test.mp4', 'w', plugin='pyav')
-        recording_file.init_video_stream('vp9', fps=60)
+        recording_file.init_video_stream('vp9', fps=30)
 
         # run scenarios
         ious = []
