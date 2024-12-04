@@ -105,10 +105,6 @@ def main():
             print(f'Running scenario: destination={destination_parking_spot}, parked_spots={parked_spots}')
             run_scenario(world, destination_parking_spot, parked_spots, ious, recording_file)
 
-        # cleanup
-        recording_file.close()
-        world.tick()
-
         # graph ious
         plt.clf()
         plt.boxplot(ious, positions=[1], vert=True, patch_artist=True, widths=0.5,
@@ -125,6 +121,10 @@ def main():
 
     except KeyboardInterrupt:
         print('stopping simulation')
+    
+    finally:
+        recording_file.close()
+        world.tick()
 
 if __name__ == '__main__':
     main()
