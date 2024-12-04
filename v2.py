@@ -236,7 +236,7 @@ class CarlaCar():
             recording_file.write_frame(data, pixel_format='bgr24')
             if self.car.mode == Mode.PARKED:
                 for _ in range(10):
-                    recording_file.write_frame(data.copy(), pixel_format='bgr24')
+                    recording_file.write_frame(data, pixel_format='bgr24')
         cam.listen(on_image)
         return cam
     
