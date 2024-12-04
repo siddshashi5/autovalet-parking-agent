@@ -59,12 +59,12 @@ def town04_spectator_follow(world, car):
 
 def town04_load(client):
     world = client.load_world('Town04_Opt')
-    world.unload_map_layer(carla.MapLayer.ParkedVehicles)
     settings = world.get_settings()
     settings.synchronous_mode = True
     settings.fixed_delta_seconds = 0.1
     world.apply_settings(settings)
     client.reload_world(False)
+    world.unload_map_layer(carla.MapLayer.ParkedVehicles)
     return world
 
 def town04_spawn_ego_vehicle(world, destination_parking_spot):
@@ -94,6 +94,7 @@ def town04_spawn_parked_cars(world, spawn_points, skip, num_random_cars):
             npc_bp.set_attribute('color', color)
         npc = world.try_spawn_actor(npc_bp, npc_transform)
         if npc is None:
+            parked_cars_bbs.append(approximate_bb_from_center(spawn_point))
             continue
         npc.set_simulate_physics(False)
         parked_cars.append(npc)
