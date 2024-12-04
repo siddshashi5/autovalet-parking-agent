@@ -316,9 +316,18 @@ class Car():
             wp_dist = cur.distance(wp)
         self.ti = ti
 
-        # check if the next waypoint is behind us, in which case we need to reverse
+        # find lookahead waypoint
         wp = trajectory[ti]
-        future_wp = trajectory[min(ti + LOOKAHEAD, len(trajectory) - 1)]
+        future_wp = wp
+        for i in range(ti + 1, ti + LOOKAHEAD + 1):
+            if i >= len(trajectory):
+                break
+            new_dist = cur.distance(trajectory[i])
+            if new_dist < wp_dist:
+                break
+            future_wp = trajectory[i]
+            wp_dist = new_dist
+
         cur.direction = wp.direction
         ctrl = self.controller.run_step(
             mps_to_kmph(cur.speed),
