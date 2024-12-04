@@ -21,7 +21,12 @@ PARKED_VEHICLES = [
     'vehicle.dodge.charger_2020',
     'vehicle.ford.mustang',
     'vehicle.jeep.wrangler_rubicon',
-    'vehicle.lincoln.mkz_2017'
+    'vehicle.lincoln.mkz_2017',
+    'vehicle.audi.a2',
+    'vehicle.bmw.grandtourer',
+    'vehicle.chevrolet.impala',
+    'vehicle.mini.cooper_s',
+    'vehicle.toyota.prius'
 ]
 
 def load_client():
@@ -83,6 +88,9 @@ def town04_spawn_parked_cars(world, spawn_points, skip, num_random_cars):
         spawn_point = parking_vehicle_locations_Town04[i]
         npc_transform = carla.Transform(spawn_point, rotation=random.choice(parking_vehicle_rotation))
         npc_bp = random.choice(blueprints)
+        if npc_bp.has_attribute('color'):
+            color = random.choice(npc_bp.get_attribute('color').recommended_values)
+            npc_bp.set_attribute('color', color)
         npc = world.try_spawn_actor(npc_bp, npc_transform)
         if npc is None:
             continue
