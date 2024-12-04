@@ -19,16 +19,43 @@ import matplotlib.pyplot as plt
 
 SCENARIOS = [
     (17, [16, 18]),
-    (25, [24, 26]),
     (18, [17, 19]),
     (19, [18, 20]),
+    (20, [19, 21]),
+    (21, [20, 22]),
+    (22, [21, 23]),
+    (23, [22, 24]),
+    (24, [23, 25]),
+    (25, [24, 26]),
+    (26, [25, 27]),
+    (27, [26, 28]),
+    (28, [27, 29]),
+    (29, [28, 30]),
+    (30, [29, 31]),
+    (31, [30, 32]),
+    (32, [31, 33]),
+    (33, [32, 34]),
+    (34, [33, 35]),
     (35, [34, 36]),
+    (36, [35, 37]),
+    (37, [36, 38]),
+    (38, [37, 39]),
+    (39, [38, 40]),
+    (40, [39, 41]),
+    (41, [40, 42]),
+    (42, [41, 43]),
+    (43, [42, 44]),
+    (44, [43, 45]),
+    (45, [44, 46]),
+    (46, [45, 47]),
+    (47, [46, 48]),
 ]
+NUM_RANDOM_CARS = 25
 
 def run_scenario(world, destination_parking_spot, parked_spots, ious):
     try:
         # load parked cars
-        parked_cars, parked_cars_bbs = town04_spawn_parked_cars(world, parked_spots, destination_parking_spot)
+        parked_cars, parked_cars_bbs = town04_spawn_parked_cars(world, parked_spots, destination_parking_spot, NUM_RANDOM_CARS)
 
         # load car
         car = town04_spawn_ego_vehicle(world, destination_parking_spot)

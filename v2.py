@@ -12,11 +12,12 @@ def kmph_to_mps(speed): return speed/3.6
 def mps_to_kmph(speed): return speed*3.6
 
 DESTINATION_THRESHOLD = 0.2
-REPLAN_THRESHOLD = 10
+REPLAN_THRESHOLD = 2
 LOOKAHEAD = 3
+TRAJECTORY_EXTENSION = 5
 MAX_ACCELERATION = 1
 MAX_SPEED = kmph_to_mps(10)
-MIN_SPEED = kmph_to_mps(5)
+MIN_SPEED = kmph_to_mps(2)
 STOP_CONTROL = carla.VehicleControl(brake=1.0)
 
 class Mode(Enum):
@@ -205,17 +206,14 @@ class CarlaCar():
     def debug_step(self):
         cur = self.car.cur
         self.world.debug.draw_string(carla.Location(x=cur.x, y=cur.y), 'X', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=0.1, persistent_lines=True)
-        # self.world.debug.draw_string(carla.Location(x=self.car.trajectory[0].offset(1).x, y=self.car.trajectory[0].offset(1).y), 'X', draw_shadow=False, color=carla.Color(r=255, g=255, b=0), life_time=0.1, persistent_lines=True)
-        # self.world.debug.draw_string(carla.Location(x=self.car.trajectory[0].offset(-1).x, y=self.car.trajectory[0].offset(-1).y), 'X', draw_shadow=False, color=carla.Color(r=255, g=0, b=255), life_time=0.1, persistent_lines=True)
-        # print(carla.VehicleWheelLocation.FR_WHEEL)
-        # print(self.actor.get_wheel_steer_angle(carla.VehicleWheelLocation.FL_Wheel))
-        # physics_control = self.actor.get_physics_control()
-        # print(self.car.cur.distance(physics_control.wheels[2].position / 100))
         future_wp = self.car.trajectory[min(self.car.ti + LOOKAHEAD, len(self.car.trajectory) - 1)]
         self.world.debug.draw_string(carla.Location(x=future_wp.x, y=future_wp.y), 'o', draw_shadow=False, color=carla.Color(r=0, g=0, b=255), life_time=0.1, persistent_lines=True)
-        for loc in self.car.trajectory:
-            # loc = loc.offset(-1)
-            self.world.debug.draw_string(carla.Location(x=loc.x, y=loc.y), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
+        for i, loc in enumerate(self.car.trajectory):
+            if i == min(self.car.ti + LOOKAHEAD, len(self.car.trajectory) - 1):
+                color = carla.Color(r=0, g=0, b=255)
+            else:
+                color = carla.Color(r=255, g=0, b=0)
+            self.world.debug.draw_string(carla.Location(x=loc.x, y=loc.y), 'o', draw_shadow=False, color=color, life_time=1.0, persistent_lines=True)
 
     def destroy(self):
         self.actor.destroy()
@@ -281,7 +279,7 @@ class Car():
         cur = self.cur
         destination = self.destination
         distance_to_destination = cur.distance(destination)
-        if self.mode == Mode.PARKED or distance_to_destination < DESTINATION_THRESHOLD:
+        if self.mode == Mode.PARKED or distance_to_destination < DESTINATION_THRESHOLD and self.ti >= len(self.trajectory) - TRAJECTORY_EXTENSION - 1:
             self.mode = Mode.PARKED
             return STOP_CONTROL
 
@@ -298,11 +296,8 @@ class Car():
                 new_trajectory = plan_hybrid_astar(cur, destination, self.obs)
 
             if new_trajectory:
-                new_trajectory.append(destination.offset(1/3))
-                new_trajectory.append(destination.offset(2/3))
-                new_trajectory.append(destination.offset(3/3))
-                new_trajectory.append(destination.offset(4/3))
-                new_trajectory.append(destination.offset(5/3))
+                for i in range(1, TRAJECTORY_EXTENSION+1):
+                    new_trajectory.append(destination.offset(i/3))
                 self.ti = 0
                 trajectory = self.trajectory = new_trajectory
             else:

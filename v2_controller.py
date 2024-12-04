@@ -223,94 +223,12 @@ class PIDLateralController:
             :param vehicle_transform: current transform of the vehicle
             :return: steering control in the range [-1, 1]
         """
-        # front_cur = cur.offset(1)
-        # front_wp = wp.offset(1)
-        # back_cur = cur.offset(-1)
-        # back_wp = wp.offset(-1)
-        # forward_vec = np.array([np.cos(cur.angle), np.sin(cur.angle), 0])
-
-        # front_wp_vec = np.array([front_wp.x - front_cur.x, front_wp.y - front_cur.y, 0])
-        # front_dot = np.dot(forward_vec, front_wp_vec) / (np.linalg.norm(forward_vec) * np.linalg.norm(front_wp_vec))
-        # front_cross = np.cross(forward_vec, front_wp_vec)
-        # front_angle = np.acos(front_dot)
-        # if front_cross[2] < 0:
-        #     front_angle *= -1
-
-        # back_wp_vec = np.array([back_wp.x - back_cur.x, back_wp.y - back_cur.y, 0])
-        # back_dot = np.dot(forward_vec, back_wp_vec) / (np.linalg.norm(forward_vec) * np.linalg.norm(back_wp_vec))
-        # back_cross = np.cross(forward_vec, back_wp_vec)
-        # back_angle = np.acos(back_dot)
-        # if back_cross[2] < 0:
-        #     back_angle *= -1
-        # if front_cross[2] < 0 and back_cross[2] > 0 or front_cross[2] > 0 and back_cross[2] < 0:
-        #     back_angle *= -1
-
-        # print(f'{np.rad2deg(front_angle):.2f} {np.rad2deg(back_angle):.2f}')
-        # delta = 0.3*front_angle + 0.7*back_angle
-        # delta *= 0.1
-        # delta *= 2/(cur.speed*cur.speed) + 0.5
-
-        # back_cur = cur.offset(-1) if not is_reverse else cur.offset(1)
-        # back_wp = wp.offset(0) if not is_reverse else wp.offset(1)
-
-        # alpha = np.atan2(back_wp.y - back_cur.y, back_wp.x - back_cur.x) - cur.angle
-        # delta = np.atan2(2.0 * 3.0 * np.sin(alpha), np.sqrt((back_wp.x - back_cur.x) ** 2 + (back_wp.y - back_cur.y) ** 2))
-
         alpha = np.atan2(wp.y - cur.y, wp.x - cur.x) - cur.angle
         delta = np.atan2(2.0 * 3.0 * np.sin(alpha), np.sqrt((wp.x - cur.x) ** 2 + (wp.y - cur.y) ** 2))
-        # delta = np.atan2(3.0 * (wp.angle - cur.angle), np.sqrt((back_wp.x - back_cur.x) ** 2 + (back_wp.y - back_cur.y) ** 2))
-        
-        # forward_vec = np.array([np.cos(cur.angle), np.sin(cur.angle), 0])
-        # wp_vec = np.array([wp.x - cur.x, wp.y - cur.y, 0])
-        # dot = np.dot(forward_vec, wp_vec) / (np.linalg.norm(forward_vec) * np.linalg.norm(wp_vec))
-        # cross = np.cross(forward_vec, wp_vec)
-        # delta = np.acos(dot)
-        # if cross[2] < 0:
-        #     delta *= -1
-        
-        # self._e_buffer.append(delta)
-        # if len(self._e_buffer) >= 2:
-        #     _de = (self._e_buffer[-1] - self._e_buffer[-2]) / self._dt
-        #     _ie = sum(self._e_buffer) * self._dt
-        # else:
-        #     _de = 0.0
-        #     _ie = 0.0
-        # k_p, k_d, k_i = 1, 0.1, 0.0
-        # delta = (k_p * delta) + (k_d * _de) + (k_i * _ie)
 
-        # dangle = (wp.angle - prev_wp.angle) / 0.5
-        # delta = np.atan2(2.875/2 * dangle, 1)
-        print(f'{np.rad2deg(cur.angle):.2f} {np.rad2deg(wp.angle):.2f} {np.rad2deg(delta):.2f}')
-
-        # delta *= 1/(cur.speed*cur.speed) + 2
-
-        # delta = (1.5/cur.speed) * (wp.angle - cur.angle)
-        # delta = 0.2*np.atan2(3 * (wp.angle - cur.angle), cur.speed * 2 * cur.distance(wp) / (cur.speed + wp.speed))
-        # delta = 1 * (wp.angle - cur.angle) / (cur.distance(wp) / cur.speed)
-        # print(f'{np.rad2deg(cur.angle):.2f} {np.rad2deg(wp.angle):.2f} {np.rad2deg(delta):.2f}')
-        # front_cur = cur.offset(1)
-        # front_wp = wp.offset(1)
-        # phi = wp.angle - cur.angle
-        # e = np.atan2(0.1 * np.sqrt((front_wp.x - front_cur.x) ** 2 + (front_wp.y - front_cur.y) ** 2), cur.speed) 
-        # print(f'{np.rad2deg(phi):.2f} {np.rad2deg(e):.2f}')
-        # print()
-        # phi = np.arctan2(np.sin(phi), np.cos(phi))
-        # delta = phi + e
-
-        # delta = wp.angle - cur.angle
         max_angle = np.deg2rad(70)
         delta = np.clip(delta, -max_angle, max_angle)
         delta /= max_angle
-
-        # front_cur = cur.offset(1)
-        # front_wp = wp.offset(1)
-        # # heading_err = wp.angle - cur.angle
-        # heading_err = wp.angle - cur.angle
-        # cte = np.atan2(0.1 * np.sqrt((front_wp.x - front_cur.x) ** 2 + (front_wp.y - front_cur.y) ** 2), cur.speed)
-        # delta = heading_err + cte
-        # delta = np.arctan2(np.sin(delta), np.cos(delta))
-        # delta = np.clip(delta, -np.pi / 6, np.pi / 6)
-        # delta /= np.pi / 6
 
         return delta
 

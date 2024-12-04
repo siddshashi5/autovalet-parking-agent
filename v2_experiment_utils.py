@@ -66,17 +66,26 @@ def town04_spawn_ego_vehicle(world, destination_parking_spot):
     blueprint = world.get_blueprint_library().filter(EGO_VEHICLE)[0]
     return CarlaCar(world, blueprint, player_location_Town04, destination_parking_spot_loc, approximate_bb_from_center(destination_parking_spot_loc), debug=DEBUG)
 
-def town04_spawn_parked_cars(world, spawn_points, skip):
+def town04_spawn_parked_cars(world, spawn_points, skip, num_random_cars):
     blueprints = world.get_blueprint_library().filter('vehicle.*.*')
     blueprints = [bp for bp in blueprints if bp.id in PARKED_VEHICLES]
     parked_cars = []
     parked_cars_bbs = []
 
+    random_spawn_points = random.sample(range(len(parking_vehicle_locations_Town04)), num_random_cars)
+    new_spawn_points = spawn_points.copy()
+    for spawn_point in random_spawn_points:
+        if spawn_point != skip and spawn_point not in spawn_points:
+            new_spawn_points.append(spawn_point)
+    spawn_points = new_spawn_points
+
     for i in spawn_points:
         spawn_point = parking_vehicle_locations_Town04[i]
         npc_transform = carla.Transform(spawn_point, rotation=random.choice(parking_vehicle_rotation))
         npc_bp = random.choice(blueprints)
-        npc = world.spawn_actor(npc_bp, npc_transform)
+        npc = world.try_spawn_actor(npc_bp, npc_transform)
+        if npc is None:
+            continue
         npc.set_simulate_physics(False)
         parked_cars.append(npc)
         parked_cars_bbs.append([
