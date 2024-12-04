@@ -5,6 +5,7 @@ import carla
 import numpy as np
 import matplotlib.pyplot as plt
 from shapely import Polygon
+import cv2
 from hybrid_a_star.hybrid_a_star import hybrid_a_star_planning as hybrid_astar
 from v2_controller import VehiclePIDController
 
@@ -198,7 +199,47 @@ class CarlaCar():
         self.actor.apply_control(self.car.run_step())
         if self.debug:
             self.debug_step()
-
+        
+    def init_recording(self, recording_file):
+        world = self.world
+        actor = self.actor
+        cam_bp = world.get_blueprint_library().find('sensor.camera.rgb')
+        cam_bp.set_attribute('image_size_x', str(1080))
+        cam_bp.set_attribute('image_size_y', str(720))
+        cam_bp.set_attribute('fov', str(90))
+        cam_location = actor.get_transform().transform(carla.Location(x=-10, z=5))
+        cam_rotation = actor.get_transform().rotation
+        cam_rotation.pitch -= 20
+        cam_transform = carla.Transform(cam_location, cam_rotation)
+        cam = world.spawn_actor(cam_bp, cam_transform, attach_to=actor, attachment_type=carla.AttachmentType.Rigid)
+        def on_image(image):
+            data = np.frombuffer(image.raw_data, dtype=np.uint8).reshape((image.height, image.width, 4))
+            data = data[:, :, :3].copy()
+            data = cv2.putText(
+                data,
+                "autonomous, 3x speed",
+                (20, image.height - 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                fontScale=1,
+                color=(255, 255, 255),
+                thickness=2
+            )
+            data = cv2.putText(
+                data,
+                "IOU: {:.2f}".format(self.iou()),
+                (image.width - 175, image.height - 40),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                fontScale=1,
+                color=(255, 255, 255),
+                thickness=2
+            )
+            recording_file.write_frame(data, pixel_format='bgr24')
+            if self.car.mode == Mode.PARKED:
+                for _ in range(15):
+                    recording_file.write_frame(data, pixel_format='bgr24')
+        cam.listen(on_image)
+        return cam
+    
     def debug_init(self, spawn_point, destination):
         self.world.debug.draw_string(spawn_point.location, 'start', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
         self.world.debug.draw_string(destination, 'end', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)

@@ -16,6 +16,7 @@ from parking_position import (
 
 import numpy as np
 import matplotlib.pyplot as plt
+import imageio.v3 as iio
 
 SCENARIOS = [
     (17, [16, 18]),
@@ -52,13 +53,14 @@ SCENARIOS = [
 ]
 NUM_RANDOM_CARS = 25
 
-def run_scenario(world, destination_parking_spot, parked_spots, ious):
+def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_file):
     try:
         # load parked cars
         parked_cars, parked_cars_bbs = town04_spawn_parked_cars(world, parked_spots, destination_parking_spot, NUM_RANDOM_CARS)
 
         # load car
         car = town04_spawn_ego_vehicle(world, destination_parking_spot)
+        recording_cam = car.init_recording(recording_file)
 
         # HACK: enable perfect perception of parked cars
         car.car.obs = parked_cars_bbs
@@ -76,6 +78,7 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious):
         ious.append(iou)
         print(f'IOU: {iou}')
     finally:
+        recording_cam.destroy()
         car.destroy()
         for parked_car in parked_cars:
             parked_car.destroy()
@@ -90,11 +93,18 @@ def main():
         # load spectator
         town04_spectator_bev(world)
 
+        # load recording file
+        recording_file = iio.imopen('./test.mp4', 'w', plugin='pyav')
+        recording_file.init_video_stream('vp9', fps=30)
+
         # run scenarios
         ious = []
         for destination_parking_spot, parked_spots in SCENARIOS:
             print(f'Running scenario: destination={destination_parking_spot}, parked_spots={parked_spots}')
-            run_scenario(world, destination_parking_spot, parked_spots, ious)
+            run_scenario(world, destination_parking_spot, parked_spots, ious, recording_file)
+
+        # close recording file
+        recording_file.close()
 
         # graph ious
         plt.clf()
