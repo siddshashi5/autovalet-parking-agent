@@ -5,7 +5,6 @@ import carla
 import numpy as np
 import matplotlib.pyplot as plt
 from shapely import Polygon
-import lib.frenet_optimal_trajectory_planner.FrenetOptimalTrajectory.fot_wrapper as fot
 from hybrid_a_star.hybrid_a_star import hybrid_a_star_planning as hybrid_astar
 from v2_controller import VehiclePIDController
 
@@ -13,17 +12,17 @@ def kmph_to_mps(speed): return speed/3.6
 def mps_to_kmph(speed): return speed*3.6
 
 DESTINATION_THRESHOLD = 0.2
-WAYPOINT_THRESHOLD = 0.5
+REPLAN_THRESHOLD = 10
+LOOKAHEAD = 3
 MAX_ACCELERATION = 1
 MAX_SPEED = kmph_to_mps(10)
-MIN_SPEED = kmph_to_mps(2)
+MIN_SPEED = kmph_to_mps(5)
 STOP_CONTROL = carla.VehicleControl(brake=1.0)
 
 class Mode(Enum):
     DRIVING = 0
-    PARKING = 1
-    PARKED = 2
-    FAILED = 3
+    PARKED = 1
+    FAILED = 2
 
 class Direction(Enum):
     FORWARD = 0
@@ -66,7 +65,7 @@ def plot_trajectory(trajectory):
     plt.savefig('test.png')
 
 class TrajectoryPoint():
-    def __init__(self, direction: Mode, x: float, y: float, speed: float, angle: float):
+    def __init__(self, direction: Direction, x: float, y: float, speed: float, angle: float):
         self.direction = direction
         self.x = x
         self.y = y
@@ -77,7 +76,7 @@ class TrajectoryPoint():
         return sqrt((self.x - other.x)**2 + (self.y - other.y)**2)
 
     def offset(self, sign: int = 1):
-        return TrajectoryPoint(self.direction, self.x + 2*sign*np.cos(self.angle), self.y + 2*sign*np.sin(self.angle), self.speed, self.angle)
+        return TrajectoryPoint(self.direction, self.x + 1.6*sign*np.cos(self.angle), self.y + 1.6*sign*np.sin(self.angle), self.speed, self.angle)
 
 def refine_trajectory(trajectory: list[TrajectoryPoint]):
     if len(trajectory) == 0: return
@@ -151,27 +150,19 @@ def plan_hybrid_astar(cur: TrajectoryPoint, destination: TrajectoryPoint, obs: l
     # plot start, end, and obstacles
     hybrid_astar_path = hybrid_astar(initial_conditions['start'], initial_conditions['end'], ox, oy, 2.0, np.deg2rad(15.0))
     if not hybrid_astar_path:
-        initial_conditions['end'][2] += np.pi
-        hybrid_astar_path = hybrid_astar(initial_conditions['start'], initial_conditions['end'], ox, oy, 2.0, np.deg2rad(15.0))
-        if not hybrid_astar_path:
-            return []
+        return []
     result_x = hybrid_astar_path.x_list
     result_y = hybrid_astar_path.y_list
     result_yaw = hybrid_astar_path.yaw_list
+    result_direction = hybrid_astar_path.direction_list
 
     # generate trajectory points
-    trajectory = [TrajectoryPoint(cur.direction, x, y, MIN_SPEED, yaw) for x, y, yaw in zip(result_x, result_y, result_yaw)]
+    trajectory = [TrajectoryPoint(Direction.FORWARD if d else Direction.REVERSE, x, y, MIN_SPEED, yaw) for x, y, yaw, d in zip(result_x, result_y, result_yaw, result_direction)]
     trajectory[0].speed = cur.speed
     trajectory[0].angle = cur.angle
     refine_trajectory(trajectory)
-
-    # remove points that are too close
-    new_trajectory = []
-    for wp in trajectory:
-        if cur.distance(wp) > WAYPOINT_THRESHOLD:
-            new_trajectory.append(wp)
     
-    return new_trajectory
+    return trajectory
 
 # TODO: get data from actual GNSS sensor instead of getting
 # perfect vehicle data from CARLA
@@ -213,8 +204,17 @@ class CarlaCar():
 
     def debug_step(self):
         cur = self.car.cur
-        self.world.debug.draw_string(carla.Location(x=cur.x, y=cur.y), 'X', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
+        self.world.debug.draw_string(carla.Location(x=cur.x, y=cur.y), 'X', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=0.1, persistent_lines=True)
+        # self.world.debug.draw_string(carla.Location(x=self.car.trajectory[0].offset(1).x, y=self.car.trajectory[0].offset(1).y), 'X', draw_shadow=False, color=carla.Color(r=255, g=255, b=0), life_time=0.1, persistent_lines=True)
+        # self.world.debug.draw_string(carla.Location(x=self.car.trajectory[0].offset(-1).x, y=self.car.trajectory[0].offset(-1).y), 'X', draw_shadow=False, color=carla.Color(r=255, g=0, b=255), life_time=0.1, persistent_lines=True)
+        # print(carla.VehicleWheelLocation.FR_WHEEL)
+        # print(self.actor.get_wheel_steer_angle(carla.VehicleWheelLocation.FL_Wheel))
+        # physics_control = self.actor.get_physics_control()
+        # print(self.car.cur.distance(physics_control.wheels[2].position / 100))
+        future_wp = self.car.trajectory[min(self.car.ti + LOOKAHEAD, len(self.car.trajectory) - 1)]
+        self.world.debug.draw_string(carla.Location(x=future_wp.x, y=future_wp.y), 'o', draw_shadow=False, color=carla.Color(r=0, g=0, b=255), life_time=0.1, persistent_lines=True)
         for loc in self.car.trajectory:
+            # loc = loc.offset(-1)
             self.world.debug.draw_string(carla.Location(x=loc.x, y=loc.y), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
 
     def destroy(self):
@@ -244,15 +244,16 @@ class CarlaCar():
         destination_vertices = [(destination_bb[0], destination_bb[1]), (destination_bb[0], destination_bb[3]), (destination_bb[2], destination_bb[3]), (destination_bb[2], destination_bb[1])]
 
         # Debug bounding boxes
-        # self.world.debug.draw_string(carla.Location(x=car_vertices[0][0], y=car_vertices[0][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
-        # self.world.debug.draw_string(carla.Location(x=car_vertices[1][0], y=car_vertices[1][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
-        # self.world.debug.draw_string(carla.Location(x=car_vertices[2][0], y=car_vertices[2][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
-        # self.world.debug.draw_string(carla.Location(x=car_vertices[3][0], y=car_vertices[3][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
+        if self.debug:
+            self.world.debug.draw_string(carla.Location(x=car_vertices[0][0], y=car_vertices[0][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=0.1, persistent_lines=True)
+            self.world.debug.draw_string(carla.Location(x=car_vertices[1][0], y=car_vertices[1][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=0.1, persistent_lines=True)
+            self.world.debug.draw_string(carla.Location(x=car_vertices[2][0], y=car_vertices[2][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=0.1, persistent_lines=True)
+            self.world.debug.draw_string(carla.Location(x=car_vertices[3][0], y=car_vertices[3][1]), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=0.1, persistent_lines=True)
 
-        # self.world.debug.draw_string(carla.Location(x=destination_vertices[0][0], y=destination_vertices[0][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
-        # self.world.debug.draw_string(carla.Location(x=destination_vertices[1][0], y=destination_vertices[1][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
-        # self.world.debug.draw_string(carla.Location(x=destination_vertices[2][0], y=destination_vertices[2][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
-        # self.world.debug.draw_string(carla.Location(x=destination_vertices[3][0], y=destination_vertices[3][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=1.0, persistent_lines=True)
+            self.world.debug.draw_string(carla.Location(x=destination_vertices[0][0], y=destination_vertices[0][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=0.1, persistent_lines=True)
+            self.world.debug.draw_string(carla.Location(x=destination_vertices[1][0], y=destination_vertices[1][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=0.1, persistent_lines=True)
+            self.world.debug.draw_string(carla.Location(x=destination_vertices[2][0], y=destination_vertices[2][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=0.1, persistent_lines=True)
+            self.world.debug.draw_string(carla.Location(x=destination_vertices[3][0], y=destination_vertices[3][1]), 'o', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=0.1, persistent_lines=True)
 
         car_polygon = Polygon(car_vertices)
         destination_polygon = Polygon(destination_vertices)
@@ -263,23 +264,20 @@ class Car():
     def __init__(self, destination: Tuple[float, float], gnss_sensor: CarlaGnssSensor):
         self.cur = TrajectoryPoint(Direction.FORWARD, 0, 0, 0, 0)
         self.obs: list[list[float]] = []
-        self.destination = TrajectoryPoint(Direction.FORWARD, destination[0], destination[1], 0, 0)
+        self.destination = TrajectoryPoint(Direction.FORWARD, destination[0], destination[1], MIN_SPEED, 0).offset(-1)
         self.controller = VehiclePIDController({'K_P': 2, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 0.5, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05})
         self.gnss_sensor = gnss_sensor
         self.trajectory: list[TrajectoryPoint] = []
+        self.ti = 0
         self.mode = Mode.DRIVING
 
     def perceive(self):
         self.cur.x, self.cur.y = self.gnss_sensor.get_location()
         self.cur.speed = self.gnss_sensor.get_speed()
         self.cur.angle = self.gnss_sensor.get_heading()
-        # TODO: get/update obstacles and lane waypoints from sensor data only,
-        # adding data to graph as needed
+        self.cur = self.cur.offset(-1)
 
     def plan(self):
-        # TODO: handle planning for exploration phase
-        # if we're at destination, stop
-        # TODO: also stop if unexpected obstacle detected
         cur = self.cur
         destination = self.destination
         distance_to_destination = cur.distance(destination)
@@ -287,39 +285,51 @@ class Car():
             self.mode = Mode.PARKED
             return STOP_CONTROL
 
-        # switch to parking mode if close to destination
-        if self.mode == Mode.DRIVING and distance_to_destination < 25:
-            self.mode = Mode.PARKING
-
-        # remove visited points from trajectory
-        trajectory = self.trajectory
-        num_to_remove = 0
-        for loc in trajectory[:-1]:
-            if cur.distance(loc) < WAYPOINT_THRESHOLD:
-                num_to_remove += 1
-            else:
-                break
-        if num_to_remove > 0:
-            trajectory = self.trajectory = trajectory[num_to_remove:]
-
         # replan trajectory if needed
+        trajectory = self.trajectory
         should_extend = len(trajectory) == 0
-        should_fix = len(trajectory) > 0 and cur.distance(trajectory[0]) > 2
+        should_fix = len(trajectory) > 0 and cur.distance(trajectory[self.ti]) > REPLAN_THRESHOLD
         if should_extend or should_fix:
             new_trajectory = plan_hybrid_astar(cur, destination, self.obs)
+
+            if not new_trajectory:
+                destination.angle += np.pi
+                destination = self.destination = destination.offset(-2)
+                new_trajectory = plan_hybrid_astar(cur, destination, self.obs)
+
             if new_trajectory:
+                new_trajectory.append(destination.offset(1/3))
+                new_trajectory.append(destination.offset(2/3))
+                new_trajectory.append(destination.offset(3/3))
+                new_trajectory.append(destination.offset(4/3))
+                new_trajectory.append(destination.offset(5/3))
+                self.ti = 0
                 trajectory = self.trajectory = new_trajectory
+            else:
+                self.mode = Mode.FAILED; return STOP_CONTROL
             # plot_trajectory(trajectory)
-        if not trajectory: self.mode = Mode.FAILED; return STOP_CONTROL
+
+        # find next waypoint
+        ti = self.ti
+        wp = trajectory[ti]
+        wp_dist = cur.distance(wp)
+        for i in range(ti + 1, len(trajectory)):
+            if cur.distance(trajectory[i]) > wp_dist:
+                break
+            ti = i
+            wp = trajectory[i]
+            wp_dist = cur.distance(wp)
+        self.ti = ti
 
         # check if the next waypoint is behind us, in which case we need to reverse
-        wp = trajectory[0]
+        wp = trajectory[ti]
+        future_wp = trajectory[min(ti + LOOKAHEAD, len(trajectory) - 1)]
         cur.direction = wp.direction
         ctrl = self.controller.run_step(
             mps_to_kmph(cur.speed),
             mps_to_kmph(wp.speed),
             cur,
-            wp,
+            future_wp,
             wp.direction == Direction.REVERSE
         )
         return ctrl
