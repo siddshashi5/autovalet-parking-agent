@@ -62,8 +62,9 @@ def town04_load(client):
     world.unload_map_layer(carla.MapLayer.ParkedVehicles)
     settings = world.get_settings()
     settings.synchronous_mode = True
-    settings.fixed_delta_seconds = 0.1
+    settings.fixed_delta_seconds = 0.05
     world.apply_settings(settings)
+    client.reload_world(False)
     return world
 
 def town04_spawn_ego_vehicle(world, destination_parking_spot):

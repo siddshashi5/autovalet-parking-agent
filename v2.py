@@ -1,6 +1,7 @@
 from math import sqrt
 from enum import Enum
 from typing import Tuple
+from queue import Queue
 import carla
 import numpy as np
 import matplotlib.pyplot as plt
@@ -190,6 +191,9 @@ class CarlaCar():
         self.gnss_sensor = CarlaGnssSensor(self.actor)
         self.car = Car((destination.x, destination.y), self.gnss_sensor)
         self.destination_bb = destination_bb
+        self.recording_file = None
+        self.has_recorded_segment = False
+        self.frames = Queue()
 
         self.debug = debug
         if debug:
@@ -197,10 +201,16 @@ class CarlaCar():
 
     def run_step(self):
         self.actor.apply_control(self.car.run_step())
+
+        if self.recording_file:
+            while not self.frames.empty():
+                self.process_recording_frame(self.frames.get())
+
         if self.debug:
             self.debug_step()
         
     def init_recording(self, recording_file):
+        self.recording_file = recording_file
         world = self.world
         actor = self.actor
         cam_bp = world.get_blueprint_library().find('sensor.camera.rgb')
@@ -212,33 +222,39 @@ class CarlaCar():
         cam_rotation.pitch -= 20
         cam_transform = carla.Transform(cam_location, cam_rotation)
         cam = world.spawn_actor(cam_bp, cam_transform, attach_to=actor, attachment_type=carla.AttachmentType.Rigid)
-        def on_image(image):
-            data = np.frombuffer(image.raw_data, dtype=np.uint8).reshape((image.height, image.width, 4))
-            data = data[:, :, :3].copy()
-            data = cv2.putText(
-                data,
-                "autonomous, 3x speed",
-                (20, image.height - 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                fontScale=1,
-                color=(255, 255, 255),
-                thickness=2
-            )
-            data = cv2.putText(
-                data,
-                "IOU: {:.2f}".format(self.iou()),
-                (image.width - 175, image.height - 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                fontScale=1,
-                color=(255, 255, 255),
-                thickness=2
-            )
-            recording_file.write_frame(data, pixel_format='bgr24')
-            if self.car.mode == Mode.PARKED:
-                for _ in range(10):
-                    recording_file.write_frame(data, pixel_format='bgr24')
-        cam.listen(on_image)
+        cam.listen(lambda image: self.frames.put(image))
         return cam
+    
+    def process_recording_frame(self, image):
+        if self.has_recorded_segment and self.car.mode == Mode.PARKED:
+            return
+        self.has_recorded_segment = False
+        recording_file = self.recording_file
+        data = np.frombuffer(image.raw_data, dtype=np.uint8).reshape((image.height, image.width, 4))
+        data = data[:, :, :3].copy()
+        data = cv2.putText(
+            data,
+            "autonomous, 3x speed",
+            (20, image.height - 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale=1,
+            color=(255, 255, 255),
+            thickness=2
+        )
+        data = cv2.putText(
+            data,
+            "IOU: {:.2f}".format(self.iou()),
+            (image.width - 175, image.height - 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale=1,
+            color=(255, 255, 255),
+            thickness=2
+        )
+        recording_file.write_frame(data, pixel_format='bgr24')
+        if self.car.mode == Mode.PARKED:
+            self.has_recorded_segment = True
+            for _ in range(30):
+                recording_file.write_frame(data, pixel_format='bgr24')
     
     def debug_init(self, spawn_point, destination):
         self.world.debug.draw_string(spawn_point.location, 'start', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)

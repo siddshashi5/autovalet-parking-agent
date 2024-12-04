@@ -95,7 +95,7 @@ def main():
 
         # load recording file
         recording_file = iio.imopen('./test.mp4', 'w', plugin='pyav')
-        recording_file.init_video_stream('vp9', fps=30)
+        recording_file.init_video_stream('vp9', fps=60)
 
         # run scenarios
         ious = []
@@ -103,8 +103,9 @@ def main():
             print(f'Running scenario: destination={destination_parking_spot}, parked_spots={parked_spots}')
             run_scenario(world, destination_parking_spot, parked_spots, ious, recording_file)
 
-        # close recording file
+        # cleanup
         recording_file.close()
+        world.tick()
 
         # graph ious
         plt.clf()
