@@ -6,7 +6,7 @@ from v2_experiment_utils import (
     town04_spawn_ego_vehicle,
     town04_spawn_parked_cars,
     town04_spectator_follow,
-    town04_get_drivable_graph
+    spawn_walkers,
 )
 
 # For lane waypoint hack
@@ -58,6 +58,9 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_
         # load parked cars
         parked_cars, parked_cars_bbs = town04_spawn_parked_cars(world, parked_spots, destination_parking_spot, NUM_RANDOM_CARS)
 
+        # load moving walkers
+        walkers, walker_controllers = spawn_walkers(world)
+
         # load car
         car = town04_spawn_ego_vehicle(world, destination_parking_spot)
         recording_cam = car.init_recording(recording_file)
@@ -84,6 +87,11 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_
         car.destroy()
         for parked_car in parked_cars:
             parked_car.destroy()
+        for controller in walker_controllers:
+            controller.stop()
+            controller.destroy()
+        for walker in walkers:
+            walker.destroy()
 
 def main():
     try:

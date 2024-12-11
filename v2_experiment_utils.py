@@ -185,3 +185,27 @@ def is_path_drivable(x1, y1, x2, y2, drivable_grid):
     """Checks if the path between two points is within drivable regions."""
     rr, cc = line(y1, x1, y2, x2)  # Generate points on the line between nodes
     return np.all(drivable_grid[rr, cc])  # Check if all points on the line are drivable
+
+def spawn_walkers(world, spawn_points=[carla.Location(x=303.5, y=-235.73, z=0.3)]):
+    # Get blueprints
+    walker_blueprints = world.get_blueprint_library().filter("walker.pedestrian.*")
+    walker_controller_bp = world.get_blueprint_library().find('controller.ai.walker')
+
+    walkers = []
+    controllers = []
+
+    for spawn_point in spawn_points: 
+        # Spawn walker
+        walker_bp = random.choice(walker_blueprints)
+        walker = world.try_spawn_actor(walker_bp, player_location_Town04)
+        walkers.append(walker)
+
+        # Spawn controller
+        controller = world.try_spawn_actor(walker_controller_bp, player_location_Town04, attach_to=walker)
+        controllers.append(controller)
+
+        # Initialize the controller
+        controller.start()
+        controller.go_to_location(world.get_random_location_from_navigation())
+
+    return walkers, controllers
