@@ -229,3 +229,27 @@ def mask_obstacle_map(obs: ObstacleMap, x, y):
         for j in range(obs.obs.shape[1]):
             if abs(i*.25 - x) > 20 or abs(j*.25 - y) > 20:
                 obs.obs[i, j] = 0
+
+def spawn_walkers(world, spawn_points=[carla.Location(x=303.5, y=-235.73, z=0.3)]):
+    # Get blueprints
+    walker_blueprints = world.get_blueprint_library().filter("walker.pedestrian.*")
+    walker_controller_bp = world.get_blueprint_library().find('controller.ai.walker')
+
+    walkers = []
+    controllers = []
+
+    for spawn_point in spawn_points: 
+        # Spawn walker
+        walker_bp = random.choice(walker_blueprints)
+        walker = world.try_spawn_actor(walker_bp, player_location_Town04)
+        walkers.append(walker)
+
+        # Spawn controller
+        controller = world.try_spawn_actor(walker_controller_bp, player_location_Town04, attach_to=walker)
+        controllers.append(controller)
+
+        # Initialize the controller
+        controller.start()
+        controller.go_to_location(world.get_random_location_from_navigation())
+
+    return walkers, controllers
