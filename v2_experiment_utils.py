@@ -28,6 +28,7 @@ PARKED_VEHICLES = [
     'vehicle.mini.cooper_s',
     'vehicle.toyota.prius'
 ]
+DELTA_SECONDS = 0.1
 
 def load_client():
     print(f"starting simulation on {HOST}:{PORT}")
@@ -61,7 +62,7 @@ def town04_load(client):
     world = client.load_world('Town04_Opt')
     settings = world.get_settings()
     settings.synchronous_mode = True
-    settings.fixed_delta_seconds = 0.1
+    settings.fixed_delta_seconds = DELTA_SECONDS
     world.apply_settings(settings)
     client.reload_world(False)
     world.unload_map_layer(carla.MapLayer.ParkedVehicles)
@@ -199,12 +200,12 @@ def obstacle_map_from_bbs(bbs):
         obs_max_y = max(obs_max_y, obs[1], obs[3])
 
         # top and bottom
-        for x in np.arange(obs[0], obs[2], .25):
+        for x in np.arange(obs[0] - .25, obs[2] + .25, .25):
             obs_list.append((x, obs[1]))
             obs_list.append((x, obs[3]))
 
         # left and right
-        for y in np.arange(obs[1], obs[3], .25):
+        for y in np.arange(obs[1] - .25, obs[3] + .25, .25):
             obs_list.append((obs[0], y))
             obs_list.append((obs[2], y)) 
 
@@ -221,3 +222,10 @@ def obstacle_map_from_bbs(bbs):
         obs[int((x - obs_min_x) / .25), int((y - obs_min_y) / .25)] = 1
     
     return ObstacleMap(obs_min_x, obs_min_y, obs)
+
+def mask_obstacle_map(obs: ObstacleMap, x, y):
+    # mask the obstacle map and only keep the parts around the car
+    for i in range(obs.obs.shape[0]):
+        for j in range(obs.obs.shape[1]):
+            if abs(i*.25 - x) > 20 or abs(j*.25 - y) > 20:
+                obs.obs[i, j] = 0

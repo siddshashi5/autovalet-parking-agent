@@ -7,7 +7,9 @@ from v2_experiment_utils import (
     town04_spawn_parked_cars,
     town04_spectator_follow,
     town04_get_drivable_graph,
-    obstacle_map_from_bbs
+    obstacle_map_from_bbs,
+    mask_obstacle_map,
+    DELTA_SECONDS
 )
 
 # For lane waypoint hack
@@ -53,6 +55,7 @@ SCENARIOS = [
     # (47, [46, 48]),
 ]
 NUM_RANDOM_CARS = 25
+PERCEPTION_LATENCY = 15
 
 def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_file):
     try:
@@ -64,26 +67,26 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_
         traffic_cone_bp = world.get_blueprint_library().find('static.prop.trafficcone01')
         traffic_cones = []
         traffic_cone_bbs = []
-        # traffic_cone_locations = [
-        #     carla.Location(x=284, y=-235+5, z=0.3),
-        #     carla.Location(x=287, y=-230+5, z=0.3),
-        #     # carla.Location(x=284, y=-235, z=0.3),
-        # ]
-        # for traffic_cone_location in traffic_cone_locations:
-        #     traffic_cone_transform = carla.Transform(traffic_cone_location)
-        #     traffic_cone = world.try_spawn_actor(traffic_cone_bp, traffic_cone_transform)
-        #     traffic_cone.set_simulate_physics(False)
-        #     traffic_cones.append(traffic_cone)
-        #     traffic_cone_bbs.append([
-        #         traffic_cone_location.x - traffic_cone.bounding_box.extent.x, traffic_cone_location.y - traffic_cone.bounding_box.extent.y,
-        #         traffic_cone_location.x + traffic_cone.bounding_box.extent.x, traffic_cone_location.y + traffic_cone.bounding_box.extent.y
-        #     ])
+        traffic_cone_locations = [
+            carla.Location(x=284, y=-235+5, z=0.3),
+            carla.Location(x=287, y=-230+5, z=0.3),
+            # carla.Location(x=284, y=-235, z=0.3),
+        ]
+        for traffic_cone_location in traffic_cone_locations:
+            traffic_cone_transform = carla.Transform(traffic_cone_location)
+            traffic_cone = world.try_spawn_actor(traffic_cone_bp, traffic_cone_transform)
+            traffic_cone.set_simulate_physics(False)
+            traffic_cones.append(traffic_cone)
+            traffic_cone_bbs.append([
+                traffic_cone_location.x - traffic_cone.bounding_box.extent.x, traffic_cone_location.y - traffic_cone.bounding_box.extent.y,
+                traffic_cone_location.x + traffic_cone.bounding_box.extent.x, traffic_cone_location.y + traffic_cone.bounding_box.extent.y
+            ])
 
         # spawn walker
-        walker_bp = world.get_blueprint_library().filter('walker.*')
-        walker_location = carla.Location(x=285, y=-230-2, z=0.3)
-        walker_transform = carla.Transform(walker_location)
-        walker = world.try_spawn_actor(walker_bp[0], walker_transform)
+        # walker_bp = world.get_blueprint_library().filter('walker.*')
+        # walker_location = carla.Location(x=285, y=-230-2, z=0.3)
+        # walker_transform = carla.Transform(walker_location)
+        # walker = world.try_spawn_actor(walker_bp[0], walker_transform)
         world.tick()
 
         # load car
@@ -92,6 +95,7 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_
 
         # HACK: enable perfect perception of parked cars
         car.car.obs = obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs)
+        mask_obstacle_map(car.car.obs, 0, 0)
         # visualize 1 hot map
         plt.cla()
         plt.imshow(car.car.obs.obs, cmap='gray')
@@ -101,17 +105,43 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_
         car.car.lane_wps = parking_lane_waypoints_Town04
 
         # run simulation
+        i = 0
+        perception_req = None
+        perception_res = None
         while not is_done(car):
-            walker.apply_control(carla.WalkerControl(direction=carla.Vector3D(y=-1), speed=1))
-            walker_location = walker.get_location()
-            walker_bb = [
-                walker_location.x - walker.bounding_box.extent.x - 0.25, walker_location.y - walker.bounding_box.extent.y - 0.25,
-                walker_location.x + walker.bounding_box.extent.x + 0.25, walker_location.y + walker.bounding_box.extent.y + 0.25
-            ]
-            car.car.obs = obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + [walker_bb])
+            # walker.apply_control(carla.WalkerControl(direction=carla.Vector3D(y=-1), speed=1))
+            # walker_location = walker.get_location()
+            # walker_bb = [
+            #     walker_location.x - walker.bounding_box.extent.x - 0.25, walker_location.y - walker.bounding_box.extent.y - 0.25,
+            #     walker_location.x + walker.bounding_box.extent.x + 0.25, walker_location.y + walker.bounding_box.extent.y + 0.25
+            # ]
             world.tick()
+            car.localize()
+            if i % PERCEPTION_LATENCY == 0:
+                car.perceive()
+                # car.car.obs = obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + [walker_bb])
+
+                # process perception response on the car
+                if perception_res: car.car.obs = perception_res; print("car Received perception response")
+                plt.cla()
+                plt.imshow(car.car.obs.obs, cmap='gray')
+                plt.savefig('obs_map.png')
+
+                # process perception request on server
+                if perception_req:
+                    print("server Received perception request")
+                    perception_res = obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs)
+                    mask_obstacle_map(perception_res, perception_req.x - perception_res.min_x, perception_req.y - perception_res.min_y)
+
+                # send next request
+                print("car sending request")
+                perception_req = car.car.cur
+
+            if i % 15 == 0 and car.car.cur.distance(car.car.destination) > 10:
+                car.plan()
             car.run_step()
             car.process_recording_frames()
+            i += 1
             # town04_spectator_follow(world, car)
 
         iou = car.iou()
@@ -124,7 +154,7 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_
             parked_car.destroy()
         for traffic_cone in traffic_cones:
             traffic_cone.destroy()
-        walker.destroy()
+        # walker.destroy()
 
 def main():
     try:

@@ -217,9 +217,13 @@ class CarlaCar():
         if debug:
             self.debug_init(spawn_point, destination)
 
+    def localize(self): self.car.localize()
+    def plan(self): self.car.plan()
+    def perceive(self): self.car.perceive()
+    
+    def plan(self): self.car.plan()
     def run_step(self):
-        self.actor.apply_control(self.car.run_step())
-
+        self.actor.apply_control(self.car.control())
         if self.debug:
             self.debug_step()
         
@@ -335,29 +339,26 @@ class Car():
         self.trajectory: list[TrajectoryPoint] = []
         self.ti = 0
         self.mode = Mode.DRIVING
-        self.iter = 0
 
-    def perceive(self):
+    def localize(self):
         self.cur.x, self.cur.y = self.gnss_sensor.get_location()
         self.cur.speed = self.gnss_sensor.get_speed()
         self.cur.angle = self.gnss_sensor.get_heading()
         self.cur = self.cur.offset(-1)
 
+    def perceive(self):
+        pass
+
     def plan(self):
         cur = self.cur
         destination = self.destination
-        distance_to_destination = cur.distance(destination)
-        if self.mode == Mode.PARKED or distance_to_destination < DESTINATION_THRESHOLD and self.ti >= len(self.trajectory) - TRAJECTORY_EXTENSION - 1:
-            self.mode = Mode.PARKED
-            return STOP_CONTROL
 
         # replan trajectory if needed
         trajectory = self.trajectory
         should_extend = len(trajectory) == 0
         should_fix = len(trajectory) > 0 and cur.distance(trajectory[self.ti]) > REPLAN_THRESHOLD
         has_collision = False and self.obs.check_collision(trajectory[self.ti:])
-        self.iter += 1
-        if should_extend or should_fix or has_collision or self.iter % 15 == 0:
+        if should_extend or should_fix or has_collision or True:
             new_trajectory = plan_hybrid_a_star(cur, destination, self.obs)
 
             if not new_trajectory:
@@ -373,11 +374,22 @@ class Car():
             else:
                 self.ti = 0
                 self.trajectory = []
-                self.mode = Mode.FAILED; return STOP_CONTROL
-            # plot_trajectory(trajectory)
+                self.mode = Mode.FAILED
+    
+    def control(self):
+        if self.mode == Mode.FAILED: return STOP_CONTROL
+
+        # stop if close to destination
+        cur = self.cur
+        destination = self.destination
+        distance_to_destination = cur.distance(destination)
+        if self.mode == Mode.PARKED or distance_to_destination < DESTINATION_THRESHOLD and self.ti >= len(self.trajectory) - TRAJECTORY_EXTENSION - 1:
+            self.mode = Mode.PARKED
+            return STOP_CONTROL
 
         # find next waypoint
         ti = self.ti
+        trajectory = self.trajectory
         wp = trajectory[ti]
         wp_dist = cur.distance(wp)
         for i in range(ti + 1, len(trajectory)):
@@ -412,4 +424,5 @@ class Car():
 
     def run_step(self):
         self.perceive()
-        return self.plan()
+        self.plan()
+        return self.control()
