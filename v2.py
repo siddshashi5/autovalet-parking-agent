@@ -7,7 +7,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from shapely import Polygon
 import cv2
-from hybrid_a_star.hybrid_a_star import hybrid_a_star_planning as hybrid_astar
+from hybrid_a_star.hybrid_a_star import hybrid_a_star_planning as hybrid_a_star
+from hybrid_a_star.car import rectangle_check, BUBBLE_DIST, BUBBLE_R
 from v2_controller import VehiclePIDController
 
 def kmph_to_mps(speed): return speed/3.6
@@ -81,6 +82,35 @@ class TrajectoryPoint():
     def offset(self, sign: int = 1):
         return TrajectoryPoint(self.direction, self.x + 1.6*sign*np.cos(self.angle), self.y + 1.6*sign*np.sin(self.angle), self.speed, self.angle)
 
+class ObstacleMap():
+    def __init__(self, min_x: int, min_y: int, obs: np.array):
+        self.min_x = min_x
+        self.min_y = min_y
+        self.obs = obs
+
+    def check_collision(self, trajectory: list[TrajectoryPoint]):
+        for wp in trajectory:
+            cx = wp.x + BUBBLE_DIST * np.cos(wp.angle)
+            cy = wp.y + BUBBLE_DIST * np.sin(wp.angle)
+            xs = []
+            ys = []
+
+            for i in range(len(self.obs)):
+                for j in range(len(self.obs[0])):
+                    x = i * 0.25 + self.min_x
+                    y = j * 0.25 + self.min_y
+                    if self.obs[i][j] == 1 and (x - cx)**2 + (y - cy)**2 < BUBBLE_R**2:
+                        xs.append(x)
+                        ys.append(y)
+
+            if not xs:
+                continue
+
+            if not rectangle_check(wp.x, wp.y, wp.angle, xs, ys):
+                return True
+
+        return False
+
 def refine_trajectory(trajectory: list[TrajectoryPoint]):
     if len(trajectory) == 0: return
 
@@ -124,34 +154,17 @@ def refine_trajectory(trajectory: list[TrajectoryPoint]):
             d = trajectory[i-1].distance(trajectory[i])
             trajectory[i].speed = min(trajectory[i].speed, sqrt(trajectory[i+1].speed**2 + 2 * MAX_ACCELERATION * d))
 
-def plan_hybrid_astar(cur: TrajectoryPoint, destination: TrajectoryPoint, obs: list[list[float]]) -> list[TrajectoryPoint]:
-    # use Hybrid A* planner
-    initial_conditions = {
-        'start': np.array([cur.x, cur.y, cur.angle]),
-        'end': np.array([destination.x, destination.y, destination.angle]),
-        'obs': np.array(obs)
-    }
+def plan_hybrid_a_star(cur: TrajectoryPoint, destination: TrajectoryPoint, obs: ObstacleMap) -> list[TrajectoryPoint]:
+    # run planner
+    start = np.array([cur.x - obs.min_x, cur.y - obs.min_y, cur.angle])
+    end = np.array([destination.x - obs.min_x, destination.y - obs.min_y, destination.angle])
     ox = []
     oy = []
-    for obs in obs:
-        # top and bottom
-        for x in np.arange(obs[0], obs[2], .5):
-            ox.append(x.item())
-            oy.append(obs[1])
+    for coord in np.argwhere(obs.obs == 1):
+        ox.append(coord[0]*.25)
+        oy.append(coord[1]*.25)
 
-            ox.append(x.item())
-            oy.append(obs[3])
-
-        # left and right
-        for y in np.arange(obs[1], obs[3], .5):
-            ox.append(obs[0])
-            oy.append(y.item())
-
-            ox.append(obs[2])
-            oy.append(y.item())
-
-    # plot start, end, and obstacles
-    hybrid_astar_path = hybrid_astar(initial_conditions['start'], initial_conditions['end'], ox, oy, 2.0, np.deg2rad(15.0))
+    hybrid_astar_path = hybrid_a_star(start, end, ox, oy, 2.0, np.deg2rad(15.0))
     if not hybrid_astar_path:
         return []
     result_x = hybrid_astar_path.x_list
@@ -159,8 +172,13 @@ def plan_hybrid_astar(cur: TrajectoryPoint, destination: TrajectoryPoint, obs: l
     result_yaw = hybrid_astar_path.yaw_list
     result_direction = hybrid_astar_path.direction_list
 
+    # sometimes the direction list is too short
+    if len(result_direction) < len(result_x):
+        for _ in range(len(result_x) - len(result_direction)):
+            result_direction.append(result_direction[-1])
+
     # generate trajectory points
-    trajectory = [TrajectoryPoint(Direction.FORWARD if d else Direction.REVERSE, x, y, MIN_SPEED, yaw) for x, y, yaw, d in zip(result_x, result_y, result_yaw, result_direction)]
+    trajectory = [TrajectoryPoint(Direction.FORWARD if d else Direction.REVERSE, x + obs.min_x, y + obs.min_y, MIN_SPEED, yaw) for x, y, yaw, d in zip(result_x, result_y, result_yaw, result_direction)]
     trajectory[0].speed = cur.speed
     trajectory[0].angle = cur.angle
     refine_trajectory(trajectory)
@@ -261,14 +279,8 @@ class CarlaCar():
     def debug_step(self):
         cur = self.car.cur
         self.world.debug.draw_string(carla.Location(x=cur.x, y=cur.y), 'X', draw_shadow=False, color=carla.Color(r=0, g=255, b=0), life_time=0.1, persistent_lines=True)
-        future_wp = self.car.trajectory[min(self.car.ti + LOOKAHEAD, len(self.car.trajectory) - 1)]
-        self.world.debug.draw_string(carla.Location(x=future_wp.x, y=future_wp.y), 'o', draw_shadow=False, color=carla.Color(r=0, g=0, b=255), life_time=0.1, persistent_lines=True)
-        for i, loc in enumerate(self.car.trajectory):
-            if i == min(self.car.ti + LOOKAHEAD, len(self.car.trajectory) - 1):
-                color = carla.Color(r=0, g=0, b=255)
-            else:
-                color = carla.Color(r=255, g=0, b=0)
-            self.world.debug.draw_string(carla.Location(x=loc.x, y=loc.y), 'o', draw_shadow=False, color=color, life_time=1.0, persistent_lines=True)
+        for loc in self.car.trajectory:
+            self.world.debug.draw_string(carla.Location(x=loc.x, y=loc.y), 'o', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=1.0, persistent_lines=True)
 
     def destroy(self):
         self.actor.destroy()
@@ -316,13 +328,14 @@ class CarlaCar():
 class Car():
     def __init__(self, destination: Tuple[float, float], gnss_sensor: CarlaGnssSensor):
         self.cur = TrajectoryPoint(Direction.FORWARD, 0, 0, 0, 0)
-        self.obs: list[list[float]] = []
+        self.obs: ObstacleMap = []
         self.destination = TrajectoryPoint(Direction.FORWARD, destination[0], destination[1], MIN_SPEED, 0).offset(-1)
         self.controller = VehiclePIDController({'K_P': 2, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 0.5, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05})
         self.gnss_sensor = gnss_sensor
         self.trajectory: list[TrajectoryPoint] = []
         self.ti = 0
         self.mode = Mode.DRIVING
+        self.iter = 0
 
     def perceive(self):
         self.cur.x, self.cur.y = self.gnss_sensor.get_location()
@@ -342,20 +355,24 @@ class Car():
         trajectory = self.trajectory
         should_extend = len(trajectory) == 0
         should_fix = len(trajectory) > 0 and cur.distance(trajectory[self.ti]) > REPLAN_THRESHOLD
-        if should_extend or should_fix:
-            new_trajectory = plan_hybrid_astar(cur, destination, self.obs)
+        has_collision = False and self.obs.check_collision(trajectory[self.ti:])
+        self.iter += 1
+        if should_extend or should_fix or has_collision or self.iter % 15 == 0:
+            new_trajectory = plan_hybrid_a_star(cur, destination, self.obs)
 
             if not new_trajectory:
                 destination.angle += np.pi
                 destination = self.destination = destination.offset(-2)
-                new_trajectory = plan_hybrid_astar(cur, destination, self.obs)
+                new_trajectory = plan_hybrid_a_star(cur, destination, self.obs)
 
             if new_trajectory:
                 for i in range(1, TRAJECTORY_EXTENSION+1):
                     new_trajectory.append(destination.offset(i/3))
-                self.ti = 0
+                self.ti = 1
                 trajectory = self.trajectory = new_trajectory
             else:
+                self.ti = 0
+                self.trajectory = []
                 self.mode = Mode.FAILED; return STOP_CONTROL
             # plot_trajectory(trajectory)
 

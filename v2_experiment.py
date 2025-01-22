@@ -6,7 +6,8 @@ from v2_experiment_utils import (
     town04_spawn_ego_vehicle,
     town04_spawn_parked_cars,
     town04_spectator_follow,
-    town04_get_drivable_graph
+    town04_get_drivable_graph,
+    obstacle_map_from_bbs
 )
 
 # For lane waypoint hack
@@ -19,37 +20,37 @@ import matplotlib.pyplot as plt
 import imageio.v3 as iio
 
 SCENARIOS = [
-    (17, [16, 18]),
-    (18, [17, 19]),
-    (19, [18, 20]),
-    (20, [19, 21]),
+    # (17, [16, 18]),
+    # (18, [17, 19]),
+    # (19, [18, 20]),
+    # (20, [19, 21]),
     (21, [20, 22]),
     (22, [21, 23]),
-    (23, [22, 24]),
-    (24, [23, 25]),
-    (25, [24, 26]),
-    (26, [25, 27]),
-    (27, [26, 28]),
-    (28, [27, 29]),
-    (29, [28, 30]),
-    (30, [29, 31]),
-    (31, [30, 32]),
-    (32, [31, 33]),
-    (33, [32, 34]),
-    (34, [33, 35]),
-    (35, [34, 36]),
-    (36, [35, 37]),
-    (37, [36, 38]),
-    (38, [37, 39]),
-    (39, [38, 40]),
-    (40, [39, 41]),
-    (41, [40, 42]),
-    (42, [41, 43]),
-    (43, [42, 44]),
-    (44, [43, 45]),
-    (45, [44, 46]),
-    (46, [45, 47]),
-    (47, [46, 48]),
+    # (23, [22, 24]),
+    # (24, [23, 25]),
+    # (25, [24, 26]),
+    # (26, [25, 27]),
+    # (27, [26, 28]),
+    # (28, [27, 29]),
+    # (29, [28, 30]),
+    # (30, [29, 31]),
+    # (31, [30, 32]),
+    # (32, [31, 33]),
+    # (33, [32, 34]),
+    # (34, [33, 35]),
+    # (35, [34, 36]),
+    # (36, [35, 37]),
+    # (37, [36, 38]),
+    # (38, [37, 39]),
+    # (39, [38, 40]),
+    # (40, [39, 41]),
+    # (41, [40, 42]),
+    # (42, [41, 43]),
+    # (43, [42, 44]),
+    # (44, [43, 45]),
+    # (45, [44, 46]),
+    # (46, [45, 47]),
+    # (47, [46, 48]),
 ]
 NUM_RANDOM_CARS = 25
 
@@ -58,19 +59,56 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_
         # load parked cars
         parked_cars, parked_cars_bbs = town04_spawn_parked_cars(world, parked_spots, destination_parking_spot, NUM_RANDOM_CARS)
 
+        # spawn traffic cone with blueprint static.prop.trafficcone01
+        import carla
+        traffic_cone_bp = world.get_blueprint_library().find('static.prop.trafficcone01')
+        traffic_cones = []
+        traffic_cone_bbs = []
+        # traffic_cone_locations = [
+        #     carla.Location(x=284, y=-235+5, z=0.3),
+        #     carla.Location(x=287, y=-230+5, z=0.3),
+        #     # carla.Location(x=284, y=-235, z=0.3),
+        # ]
+        # for traffic_cone_location in traffic_cone_locations:
+        #     traffic_cone_transform = carla.Transform(traffic_cone_location)
+        #     traffic_cone = world.try_spawn_actor(traffic_cone_bp, traffic_cone_transform)
+        #     traffic_cone.set_simulate_physics(False)
+        #     traffic_cones.append(traffic_cone)
+        #     traffic_cone_bbs.append([
+        #         traffic_cone_location.x - traffic_cone.bounding_box.extent.x, traffic_cone_location.y - traffic_cone.bounding_box.extent.y,
+        #         traffic_cone_location.x + traffic_cone.bounding_box.extent.x, traffic_cone_location.y + traffic_cone.bounding_box.extent.y
+        #     ])
+
+        # spawn walker
+        walker_bp = world.get_blueprint_library().filter('walker.*')
+        walker_location = carla.Location(x=285, y=-230-2, z=0.3)
+        walker_transform = carla.Transform(walker_location)
+        walker = world.try_spawn_actor(walker_bp[0], walker_transform)
+        world.tick()
+
         # load car
         car = town04_spawn_ego_vehicle(world, destination_parking_spot)
         recording_cam = car.init_recording(recording_file)
 
         # HACK: enable perfect perception of parked cars
-        car.car.obs = parked_cars_bbs
+        car.car.obs = obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs)
+        # visualize 1 hot map
+        plt.cla()
+        plt.imshow(car.car.obs.obs, cmap='gray')
+        plt.savefig('obs_map.png')
 
         # HACK: set lane waypoints to guide parking in adjacent lanes
         car.car.lane_wps = parking_lane_waypoints_Town04
 
         # run simulation
-        i = 0
         while not is_done(car):
+            walker.apply_control(carla.WalkerControl(direction=carla.Vector3D(y=-1), speed=1))
+            walker_location = walker.get_location()
+            walker_bb = [
+                walker_location.x - walker.bounding_box.extent.x - 0.25, walker_location.y - walker.bounding_box.extent.y - 0.25,
+                walker_location.x + walker.bounding_box.extent.x + 0.25, walker_location.y + walker.bounding_box.extent.y + 0.25
+            ]
+            car.car.obs = obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + [walker_bb])
             world.tick()
             car.run_step()
             car.process_recording_frames()
@@ -84,6 +122,9 @@ def run_scenario(world, destination_parking_spot, parked_spots, ious, recording_
         car.destroy()
         for parked_car in parked_cars:
             parked_car.destroy()
+        for traffic_cone in traffic_cones:
+            traffic_cone.destroy()
+        walker.destroy()
 
 def main():
     try:

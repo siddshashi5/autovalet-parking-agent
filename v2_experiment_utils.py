@@ -10,7 +10,7 @@ from parking_position import (
     player_location_Town04,
     town04_bound 
 )
-from v2 import CarlaCar, Mode
+from v2 import CarlaCar, Mode, ObstacleMap
 
 HOST = '127.0.0.1'
 PORT = 2000
@@ -185,3 +185,39 @@ def is_path_drivable(x1, y1, x2, y2, drivable_grid):
     """Checks if the path between two points is within drivable regions."""
     rr, cc = line(y1, x1, y2, x2)  # Generate points on the line between nodes
     return np.all(drivable_grid[rr, cc])  # Check if all points on the line are drivable
+
+def obstacle_map_from_bbs(bbs):
+    obs_min_x = float('inf')
+    obs_max_x = float('-inf')
+    obs_min_y = float('inf')
+    obs_max_y = float('-inf')
+    obs_list = []
+    for obs in bbs:
+        obs_min_x = min(obs_min_x, obs[0], obs[2])
+        obs_max_x = max(obs_max_x, obs[0], obs[2])
+        obs_min_y = min(obs_min_y, obs[1], obs[3])
+        obs_max_y = max(obs_max_y, obs[1], obs[3])
+
+        # top and bottom
+        for x in np.arange(obs[0], obs[2], .25):
+            obs_list.append((x, obs[1]))
+            obs_list.append((x, obs[3]))
+
+        # left and right
+        for y in np.arange(obs[1], obs[3], .25):
+            obs_list.append((obs[0], y))
+            obs_list.append((obs[2], y)) 
+
+    obs_min_x -= 10
+    obs_max_x += 10
+    obs_min_y -= 10
+    obs_max_y += 10
+    obs = np.zeros((int((obs_max_x - obs_min_x + 1) / .25), int((obs_max_y - obs_min_y + 1) / .25)), dtype=int)
+    obs[0, :] = 1
+    obs[-1, :] = 1
+    obs[:, 0] = 1
+    obs[:, -1] = 1
+    for x, y in obs_list:
+        obs[int((x - obs_min_x) / .25), int((y - obs_min_y) / .25)] = 1
+    
+    return ObstacleMap(obs_min_x, obs_min_y, obs)
