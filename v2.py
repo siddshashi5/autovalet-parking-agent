@@ -95,13 +95,11 @@ class ObstacleMap():
             xs = []
             ys = []
 
-            for i in range(len(self.obs)):
-                for j in range(len(self.obs[0])):
-                    x = i * 0.25 + self.min_x
-                    y = j * 0.25 + self.min_y
-                    if self.obs[i][j] == 1 and (x - cx)**2 + (y - cy)**2 < BUBBLE_R**2:
-                        xs.append(x)
-                        ys.append(y)
+            for x in range(int((cx - self.min_x - BUBBLE_R) / 0.25), int((cx - self.min_x + BUBBLE_R) / 0.25) + 1):
+                for y in range(int((cy - self.min_y - BUBBLE_R) / 0.25), int((cy - self.min_y + BUBBLE_R) / 0.25) + 1):
+                    if 0 <= x < len(self.obs) and 0 <= y < len(self.obs[0]) and self.obs[x][y] == 1:
+                        xs.append(x * 0.25 + self.min_x)
+                        ys.append(y * 0.25 + self.min_y)
 
             if not xs:
                 continue
@@ -243,7 +241,7 @@ class CarlaCar():
         cam.listen(lambda image: self.frames.put(image))
         return cam
     
-    def process_recording_frames(self):
+    def process_recording_frames(self, latency=None):
         while not self.frames.empty():
             if self.has_recorded_segment and self.car.mode == Mode.PARKED:
                 return
@@ -270,6 +268,16 @@ class CarlaCar():
                 color=(255, 255, 255),
                 thickness=2
             )
+            if latency:
+                data = cv2.putText(
+                    data,
+                    "latency: {}ms".format(latency) if latency else "",
+                    (image.width - 275, image.height - 80),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    fontScale=1,
+                    color=(255, 255, 255),
+                    thickness=2
+                )
             recording_file.write_frame(data, pixel_format='bgr24')
             if self.car.mode == Mode.PARKED:
                 self.has_recorded_segment = True
@@ -357,8 +365,9 @@ class Car():
         trajectory = self.trajectory
         should_extend = len(trajectory) == 0
         should_fix = len(trajectory) > 0 and cur.distance(trajectory[self.ti]) > REPLAN_THRESHOLD
-        has_collision = False and self.obs.check_collision(trajectory[self.ti:])
-        if should_extend or should_fix or has_collision or True:
+        has_collision = self.obs.check_collision(trajectory[self.ti:])
+
+        if should_extend or should_fix or has_collision:
             new_trajectory = plan_hybrid_a_star(cur, destination, self.obs)
 
             if not new_trajectory:

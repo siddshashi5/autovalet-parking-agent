@@ -100,8 +100,8 @@ def town04_spawn_parked_cars(world, spawn_points, skip, num_random_cars):
         npc.set_simulate_physics(False)
         parked_cars.append(npc)
         parked_cars_bbs.append([
-            spawn_point.x - npc.bounding_box.extent.x, spawn_point.y - npc.bounding_box.extent.y,
-            spawn_point.x + npc.bounding_box.extent.x, spawn_point.y + npc.bounding_box.extent.y
+            spawn_point.x - npc.bounding_box.extent.x - .125, spawn_point.y - npc.bounding_box.extent.y - .125,
+            spawn_point.x + npc.bounding_box.extent.x + .125, spawn_point.y + npc.bounding_box.extent.y + .125
         ])
 
     for i, loc in enumerate(parking_vehicle_locations_Town04):
@@ -109,6 +109,52 @@ def town04_spawn_parked_cars(world, spawn_points, skip, num_random_cars):
         parked_cars_bbs.append(approximate_bb_from_center(loc))
 
     return parked_cars, parked_cars_bbs
+
+def town04_spawn_traffic_cones(world, spawn_points):
+    traffic_cone_bp = world.get_blueprint_library().find('static.prop.trafficcone01')
+    traffic_cones = []
+    traffic_cone_bbs = []
+    traffic_cone_locations = [
+        carla.Location(x=x, y=y, z=0.3) for x, y in spawn_points
+    ]
+    for traffic_cone_location in traffic_cone_locations:
+        traffic_cone_transform = carla.Transform(traffic_cone_location)
+        traffic_cone = world.try_spawn_actor(traffic_cone_bp, traffic_cone_transform)
+        traffic_cone.set_simulate_physics(False)
+        traffic_cones.append(traffic_cone)
+        traffic_cone_bbs.append([
+            traffic_cone_location.x - traffic_cone.bounding_box.extent.x - .125, traffic_cone_location.y - traffic_cone.bounding_box.extent.y - .125,
+            traffic_cone_location.x + traffic_cone.bounding_box.extent.x + .125, traffic_cone_location.y + traffic_cone.bounding_box.extent.y + .125
+        ])
+    return traffic_cones, traffic_cone_bbs
+
+def town04_spawn_walkers(world, spawn_points):
+    walker_bp = world.get_blueprint_library().filter('walker.*')
+    walkers = []
+    walker_bbs = []
+    for x, y in spawn_points:
+        walker_location = carla.Location(x=x, y=y, z=0.3)
+        walker_transform = carla.Transform(walker_location)
+        walker = world.try_spawn_actor(walker_bp[0], walker_transform)
+        walker_bb = [
+            walker_location.x - walker.bounding_box.extent.x - 0.25, walker_location.y - walker.bounding_box.extent.y - 0.25,
+            walker_location.x + walker.bounding_box.extent.x + 0.25, walker_location.y + walker.bounding_box.extent.y + 0.25
+        ]
+        walkers.append(walker)
+        walker_bbs.append(walker_bb)
+    return walkers, walker_bbs
+
+def update_walkers(walkers):
+    walker_bbs = []
+    for walker in walkers:
+        walker.apply_control(carla.WalkerControl(direction=carla.Vector3D(y=-1), speed=1))
+        walker_location = walker.get_location()
+        walker_bb = [
+            walker_location.x - walker.bounding_box.extent.x - 0.25, walker_location.y - walker.bounding_box.extent.y - 0.25,
+            walker_location.x + walker.bounding_box.extent.x + 0.25, walker_location.y + walker.bounding_box.extent.y + 0.25
+        ]
+        walker_bbs.append(walker_bb)
+    return walker_bbs
 
 def town04_get_grid(world):
     x_size = town04_bound["x_max"] - town04_bound["x_min"] + 1
@@ -200,14 +246,18 @@ def obstacle_map_from_bbs(bbs):
         obs_max_y = max(obs_max_y, obs[1], obs[3])
 
         # top and bottom
-        for x in np.arange(obs[0] - .25, obs[2] + .25, .25):
+        for x in np.arange(obs[0], obs[2], .25):
             obs_list.append((x, obs[1]))
             obs_list.append((x, obs[3]))
+        obs_list.append((obs[2], obs[1]))
+        obs_list.append((obs[2], obs[3]))
 
         # left and right
-        for y in np.arange(obs[1] - .25, obs[3] + .25, .25):
+        for y in np.arange(obs[1], obs[3], .25):
             obs_list.append((obs[0], y))
             obs_list.append((obs[2], y)) 
+        obs_list.append((obs[0], obs[3]))
+        obs_list.append((obs[2], obs[3])) 
 
     obs_min_x -= 10
     obs_max_x += 10
@@ -223,12 +273,41 @@ def obstacle_map_from_bbs(bbs):
     
     return ObstacleMap(obs_min_x, obs_min_y, obs)
 
+def clear_obstacle_map(obs: ObstacleMap):
+    res = ObstacleMap(obs.min_x, obs.min_y, np.zeros(obs.obs.shape))
+    res.obs[0, :] = 1
+    res.obs[-1, :] = 1
+    res.obs[:, 0] = 1
+    res.obs[:, -1] = 1
+    return res
+
+def union_obstacle_map(obs1: ObstacleMap, obs2: ObstacleMap):
+    res = ObstacleMap(obs1.min_x, obs1.min_y, obs1.obs.copy())
+    for i in range(obs2.obs.shape[0]):
+        for j in range(obs2.obs.shape[1]):
+            if obs2.obs[i, j] == 1:
+                res.obs[i, j] = 1
+    return res
+
 def mask_obstacle_map(obs: ObstacleMap, x, y):
     # mask the obstacle map and only keep the parts around the car
-    for i in range(obs.obs.shape[0]):
-        for j in range(obs.obs.shape[1]):
-            if abs(i*.25 - x) > 20 or abs(j*.25 - y) > 20:
-                obs.obs[i, j] = 0
+    res = ObstacleMap(obs.min_x, obs.min_y, obs.obs.copy())
+    x -= res.min_x
+    y -= res.min_y
+
+    # corrupt the obstacle map with more random noise as we get further away from the car
+    for i in range(res.obs.shape[0]):
+        for j in range(res.obs.shape[1]):
+            if abs(i*.25 - x)**2 + abs(j*.25 - y)**2 > 10**2 and res.obs[i, j] == 1:
+                res.obs[i, j] = 1 if random.random() < 1 / (1 + abs(i*.25 - x)**2 + abs(j*.25 - y)**2) else 0
+    
+    # add back borders
+    res.obs[0, :] = 1
+    res.obs[-1, :] = 1
+    res.obs[:, 0] = 1
+    res.obs[:, -1] = 1
+
+    return res
 
 def spawn_walkers(world, spawn_points=[carla.Location(x=303.5, y=-235.73, z=0.3)]):
     # Get blueprints
