@@ -298,7 +298,7 @@ def mask_obstacle_map(obs: ObstacleMap, x, y):
     # corrupt the obstacle map with more random noise as we get further away from the car
     for i in range(res.obs.shape[0]):
         for j in range(res.obs.shape[1]):
-            if abs(i*.25 - x)**2 + abs(j*.25 - y)**2 > 10**2 and res.obs[i, j] == 1:
+            if res.obs[i, j] == 1:
                 res.obs[i, j] = 1 if random.random() < 1 / (1 + abs(i*.25 - x)**2 + abs(j*.25 - y)**2) else 0
     
     # add back borders
