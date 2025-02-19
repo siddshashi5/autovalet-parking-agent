@@ -21,11 +21,12 @@ YAW_GRID_RESOLUTION = np.deg2rad(15.0)  # [rad]
 MOTION_RESOLUTION = 0.5  # [m] path interpolate resolution
 N_STEER = 20  # number of steer command
 
-SB_COST = 100.0  # switch back penalty cost
+SB_COST = 10000.0  # switch back penalty cost
 BACK_COST = 5.0  # backward penalty cost
 STEER_CHANGE_COST = 5.0  # steer angle change penalty cost
 STEER_COST = 1.0  # steer angle change penalty cost
 H_COST = 5.0  # Heuristic cost
+MAX_ITER = 1000
 
 show_animation = False
 
@@ -274,6 +275,7 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
     heapq.heappush(pq, (calc_cost(start_node, h_dp, config),
                         calc_index(start_node, config)))
     final_path = None
+    iter = 0
 
     while True:
         if not openList:
@@ -314,6 +316,11 @@ def hybrid_a_star_planning(start, goal, ox, oy, xy_resolution, yaw_resolution):
                     pq, (calc_cost(neighbor, h_dp, config),
                          neighbor_index))
                 openList[neighbor_index] = neighbor
+
+        iter += 1
+        if iter > MAX_ITER:
+            print("Error: Cannot find path, max iterations exceeded")
+            return []
 
     path = get_final_path(closedList, final_path)
     return path

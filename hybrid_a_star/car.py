@@ -32,10 +32,16 @@ def rot_mat_2d(angle):
     """
     return Rot.from_euler('z', angle).as_matrix()[0:2, 0:2]
 
-WB = 3  # rear to front wheel
+# WB = 3  # rear to front wheel
+# W = 2.0  # width of car
+# LF = 3.75  # distance from rear to vehicle front end
+# LB = .977  # distance from rear to vehicle back end
+# MAX_STEER = 0.5  # [rad] maximum steering angle
+
+WB = 2.93  # rear to front wheel
 W = 2.0  # width of car
-LF = 3.75  # distance from rear to vehicle front end
-LB = .977  # distance from rear to vehicle back end
+LF = 3.856  # distance from rear to vehicle front end
+LB = 1.045  # distance from rear to vehicle back end
 MAX_STEER = 0.5  # [rad] maximum steering angle
 
 BUBBLE_DIST = (LF - LB) / 2.0  # distance from rear to center of vehicle.
