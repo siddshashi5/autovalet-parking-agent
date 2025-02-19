@@ -12,6 +12,8 @@ from v2_experiment_utils import (
     clear_obstacle_map,
     union_obstacle_map,
     mask_obstacle_map,
+    clear_destination_obstacle_map,
+    cleanup,
     DELTA_SECONDS
 )
 
@@ -24,8 +26,8 @@ SCENARIOS = [
     # (18, [17, 19]),
     # (19, [18, 20]),
     (20, [19, 21]),
-    (21, [20, 22]),
-    (22, [21, 23]),
+    # (21, [20, 22]),
+    # (22, [21, 23]),
     # (23, [22, 24]),
     # (24, [23, 25]),
     # (25, [24, 26]),
@@ -52,10 +54,10 @@ SCENARIOS = [
     # (46, [45, 47]),
     # (47, [46, 48]),
 ]
-NUM_RANDOM_CARS = 25
-PERCEPTION_LATENCIES = [0, 100, 200, 500, 1000, 2000, 5000] # ms
+NUM_RANDOM_CARS = 50
+PERCEPTION_LATENCIES = [100, 300] # ms
 
-def run_scenario(world, destination_parking_spot, parked_spots, latency, ious, recording_file):
+def run_scenario(world, destination_parking_spot, parked_spots, latency, ious, accelerations, recording_file):
     try:
         # load parked cars
         parked_cars, parked_cars_bbs = town04_spawn_parked_cars(world, parked_spots, destination_parking_spot, NUM_RANDOM_CARS)
@@ -89,11 +91,14 @@ def run_scenario(world, destination_parking_spot, parked_spots, latency, ious, r
         i = 0
         perception_req = None
         perception_res = None
+        world.tick()
         while not is_done(car):
             walker_bbs = update_walkers(walkers)
             world.tick()
             car.localize()
+            accelerations.append(car.actor.get_acceleration().length())
             if latency == 0:
+                car.perceive()
                 car.car.obs = union_obstacle_map(
                     car.car.obs,
                     mask_obstacle_map(
@@ -103,26 +108,42 @@ def run_scenario(world, destination_parking_spot, parked_spots, latency, ious, r
                     ),
                 )
             elif i % int(latency / 1000 / DELTA_SECONDS) == 0:
+                # car.car.obs = clear_obstacle_map(car.car.obs)
+                # print('perception snp: ', world.get_snapshot().find(car.actor.id).get_transform().location)
+                # print('perception cur: ', car.actor.get_transform().location)
+                # print('perception cur: ', world.get_snapshot().timestamp.elapsed_seconds)
+                # car.car.perceive(world.get_snapshot().find(car.actor.id).get_transform())
                 car.perceive()
+                car.car.obs.obs[75, :] = 999
+                car.car.obs.obs[140, :] = 999
+                car.car.obs.obs[:, 140] = 999
+                clear_destination_obstacle_map(car.car.obs, destination_parking_spot)
+                # TEMP: perfect perception for now
+                # car.car.obs.obs[np.where(obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + walker_bbs).obs == 1)] = 999
+                cpy = car.car.obs.probs().copy()
+                cpy[np.where(obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + walker_bbs).obs == 1)] = 1
+                plt.cla()
+                plt.imshow(cpy[::-1], cmap='gray', vmin=0.0, vmax=1.0)
+                plt.savefig('obs_map.png')
 
-                # process perception response on the car
-                if perception_res: car.car.obs = perception_res
+                # # process perception response on the car
+                # if perception_res: car.car.obs = perception_res
 
-                # process perception request on server
-                if perception_req:
-                    perception_res = union_obstacle_map(
-                        car.car.obs,
-                        mask_obstacle_map(
-                            obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + walker_bbs),
-                            perception_req.x,
-                            perception_req.y
-                        ),
-                    )
+                # # process perception request on server
+                # if perception_req:
+                #     perception_res = union_obstacle_map(
+                #         car.car.obs,
+                #         mask_obstacle_map(
+                #             obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + walker_bbs),
+                #             perception_req.x,
+                #             perception_req.y
+                #         ),
+                #     )
 
                 # send next request
                 perception_req = car.car.cur
 
-            if i % 10 == 0 and car.car.cur.distance(car.car.destination) > 10:
+            if i % 5 == 0:
                 car.plan()
             car.run_step()
             car.process_recording_frames(latency=latency)
@@ -156,20 +177,22 @@ def main():
         recording_file.init_video_stream('vp9', fps=30)
 
         # run scenarios
-        latency_ious = []
+        latency_data = []
         for latency in PERCEPTION_LATENCIES:
             ious = []
+            accelerations = []
             print(f'Running scenarios for latency: {latency}ms')
             for destination_parking_spot, parked_spots in SCENARIOS:
                 print(f'Running scenario: destination={destination_parking_spot}, parked_spots={parked_spots}')
-                run_scenario(world, destination_parking_spot, parked_spots, latency, ious, recording_file)
-            latency_ious.append((latency, ious))
+                run_scenario(world, destination_parking_spot, parked_spots, latency, ious, accelerations, recording_file)
+            latency_data.append((latency, ious, accelerations))
             
         # scatter ious for each latency value
         plt.clf()
-        for latency, ious in latency_ious:
-            x_scatter = np.random.normal(loc=latency, scale=0.05, size=len(ious))
-            plt.scatter(x_scatter, ious, alpha=0.6, label=f'{latency}ms')
+        for latency, ious, accelerations in latency_data:
+            jerks = np.diff(accelerations)
+            x_scatter = np.random.normal(loc=latency, scale=0.05, size=len(jerks))
+            plt.scatter(x_scatter, jerks, alpha=0.6, label=f'{latency}ms')
         plt.title('Parking IOU Values')
         plt.xticks(PERCEPTION_LATENCIES, [f'{latency}ms' for latency in PERCEPTION_LATENCIES])
         plt.xlabel('Perception Latency')
@@ -197,6 +220,7 @@ def main():
     finally:
         recording_file.close()
         world.tick()
+        cleanup()
 
 if __name__ == '__main__':
     main()
