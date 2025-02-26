@@ -1,7 +1,6 @@
 import random
 import carla
 import numpy as np
-import matplotlib.pyplot as plt
 import networkx
 from skimage.draw import line
 from parking_position import (
@@ -11,7 +10,6 @@ from parking_position import (
     town04_bound 
 )
 from v2 import CarlaCar, Mode, ObstacleMap
-from v2_perception import perception_cleanup
 
 HOST = '127.0.0.1'
 PORT = 2000
@@ -114,7 +112,7 @@ def town04_spawn_parked_cars(world, spawn_points, skip, num_random_cars):
     return parked_cars, parked_cars_bbs
 
 def town04_spawn_traffic_cones(world, spawn_points):
-    traffic_cone_bp = world.get_blueprint_library().find('static.prop.trafficcone01')
+    traffic_cone_bp = world.get_blueprint_library().find('static.prop.constructioncone')
     traffic_cones = []
     traffic_cone_bbs = []
     traffic_cone_locations = [
@@ -314,11 +312,11 @@ def mask_obstacle_map(obs: ObstacleMap, x, y):
 
 def clear_destination_obstacle_map(obs: ObstacleMap, destination):
     bb = approximate_bb_from_center(parking_vehicle_locations_Town04[destination])
-    x0 = int((bb[0] - obs.min_x) / .25) - 4
-    x1 = int((bb[2] - obs.min_x) / .25) + 4
-    y0 = int((bb[1] - obs.min_y) / .25) - 4
-    y1 = int((bb[3] - obs.min_y) / .25) + 4
-    obs.obs[x0:x1, y0:y1] = -999
+    x0 = int((bb[0] - obs.min_x - 1) / .25)
+    x1 = int((bb[2] - obs.min_x + 1) / .25)
+    y0 = int((bb[1] - obs.min_y - 1.5) / .25)
+    y1 = int((bb[3] - obs.min_y + 1.5) / .25)
+    obs.obs[x0:x1, y0:y1] = -10
 
 def spawn_walkers(world, spawn_points=[carla.Location(x=303.5, y=-235.73, z=0.3)]):
     # Get blueprints
@@ -344,5 +342,17 @@ def spawn_walkers(world, spawn_points=[carla.Location(x=303.5, y=-235.73, z=0.3)
 
     return walkers, controllers
 
-def cleanup():
-    perception_cleanup()
+def init_third_person_camera(world, actor):
+    cam_bp = world.get_blueprint_library().find('sensor.camera.rgb')
+    cam_bp.set_attribute('image_size_x', str(1080))
+    cam_bp.set_attribute('image_size_y', str(720))
+    cam_bp.set_attribute('fov', str(90))
+    cam_location = actor.get_transform().transform(carla.Location(x=-10, z=5))
+    cam_rotation = actor.get_transform().rotation
+    cam_rotation.pitch -= 20
+    cam_transform = carla.Transform(cam_location, cam_rotation)
+    cam = world.spawn_actor(cam_bp, cam_transform, attach_to=actor, attachment_type=carla.AttachmentType.Rigid)
+    return cam
+
+def ms_to_ticks(ms):
+    return int(ms / 1000 / DELTA_SECONDS)

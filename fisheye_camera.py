@@ -815,6 +815,9 @@ class FisheyeCamera:
         
         Note: this function should be called in order to update image for fish eye camera.
         """
+        if any([self._front_pinhole.image is None, self._left_pinhole.image is None, self._right_pinhole.image is None, self._top_pinhole.image is None, self._bottom_pinhole.image is None]):
+            return
+
         self._five_pinhole_image = np.hstack((self._left_pinhole.image,
                               self._top_pinhole.image,
                              self._front_pinhole.image,
@@ -824,7 +827,7 @@ class FisheyeCamera:
         remapped_img = cv2.remap(self._five_pinhole_image, self.maptable[..., 0], self.maptable[..., 1], cv2.INTER_NEAREST)
 
         if len(remapped_img.shape) == 2:
-            remapped_img = np.zeros((remapped_img.shape[0], remapped_img.shape[1], 3), dtype=np.uint8)
+            return
 
         remapped_img = np.multiply(remapped_img, self.circular_mask[..., None])
         

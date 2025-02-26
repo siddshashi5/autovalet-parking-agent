@@ -10,8 +10,7 @@ from shapely.geometry import Polygon
 import cv2
 from scipy.spatial.transform import Rotation
 from hybrid_a_star.hybrid_a_star import hybrid_a_star_planning as hybrid_a_star
-from hybrid_a_star.car import rectangle_check, BUBBLE_DIST, BUBBLE_R
-from fisheye_camera import FisheyeCamera, EquidistantProjection, StereographicProjection
+from fisheye_camera import FisheyeCamera, EquidistantProjection 
 from v2_perception import run_perception_model
 from v2_controller import VehiclePIDController
 
@@ -26,6 +25,10 @@ MAX_ACCELERATION = 1
 MAX_SPEED = kmph_to_mps(10)
 MIN_SPEED = kmph_to_mps(2)
 STOP_CONTROL = carla.VehicleControl(brake=1.0)
+STAGNATION_HISTORY_LENGTH = 100
+STAGNATION_THRESHOLD = 0.1
+FAILURE_HISTORY_LENGTH = 200
+FAILURE_THRESHOLD = 0.1
 
 class Mode(Enum):
     DRIVING = 0
@@ -38,39 +41,6 @@ class Direction(Enum):
 
     def opposite(self):
         return Direction.FORWARD if self == Direction.REVERSE else Direction.REVERSE
-
-def plot_trajectory(trajectory):
-    x_coords = [p.x for p in trajectory]
-    y_coords = [p.y for p in trajectory]
-    speeds = [p.speed for p in trajectory]
-    directions = [p.direction for p in trajectory]
-    
-    # Normalize speeds for color mapping
-    norm_speeds = [speed / max(speeds) if max(speeds) > 0 else 0 for speed in speeds]
-    
-    # Create a colormap
-    cmap = plt.get_cmap('viridis')
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-    
-    # Plot trajectory points with arrows indicating direction
-    for i in range(len(trajectory) - 1):
-        ax.plot([x_coords[i], x_coords[i+1]], [y_coords[i], y_coords[i+1]], color=cmap(norm_speeds[i]))
-        dx = x_coords[i+1] - x_coords[i]
-        dy = y_coords[i+1] - y_coords[i]
-        ax.arrow(x_coords[i], y_coords[i], dx, dy, head_width=0.5, head_length=0.5, fc=cmap(norm_speeds[i]), ec=cmap(norm_speeds[i]))
-        ax.text(x_coords[i], y_coords[i], f'{directions[i]}', fontsize=8)
-    
-    # Add colorbar to indicate speed
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=min(speeds), vmax=max(speeds)))
-    sm.set_array([])
-    fig.colorbar(sm, ax=ax, label='Speed (m/s)')
-    
-    ax.set_xlabel('X Coordinate')
-    ax.set_ylabel('Y Coordinate')
-    ax.set_title('Trajectory with Direction and Speed')
-    ax.grid(True)
-    plt.savefig('test.png')
 
 class TrajectoryPoint():
     def __init__(self, direction: Direction, x: float, y: float, speed: float, angle: float):
@@ -102,6 +72,9 @@ class ObstacleMap():
         y = y * 0.25 + self.min_y
         return x, y
 
+    def inverse_transform_coords(self, coords: np.array):
+        return coords * 0.25 + np.array([self.min_x, self.min_y])
+
     def circular_mask(self, x: float, y: float, r: float):
         x, y = self.transform_coord(x, y)
         r = int(r / 0.25)
@@ -111,9 +84,8 @@ class ObstacleMap():
 
     def probs(self):
         return 1 - (1 / (1 + np.exp(self.obs)))
-
-    def check_collision(self, trajectory: list[TrajectoryPoint]):
-        probs = self.probs()
+    
+    def generate_collision_mask(self, trajectory: list[TrajectoryPoint], probs: np.array):
         mask = np.zeros_like(probs, dtype=bool)
         x_coords, y_coords = np.meshgrid(np.arange(probs.shape[0]), np.arange(probs.shape[1]))
 
@@ -127,42 +99,30 @@ class ObstacleMap():
             rotated = R @ coords
             rear_distance = 1.045 * 4
             front_distance = 3.856 * 4
-            width = 2.0 * 4
+            width = 2.18 * 4
             hits = (rotated[0] >= -rear_distance) & (rotated[0] <= front_distance) & (rotated[1] >= -width/2) & (rotated[1] <= width/2)
             mask |= hits.reshape(probs.shape[1], probs.shape[0]).T
-        
-        plt.cla()
-        plt.imshow(mask[::-1] | np.rint(probs[::-1]).astype(bool), cmap='gray', vmin=0.0, vmax=1.0)
-        plt.savefig('obs_map_mask.png')
 
-        plt.cla()
-        plt.imshow(mask[::-1] & np.rint(probs[::-1]).astype(bool), cmap='gray', vmin=0.0, vmax=1.0)
-        # plt.imshow(probs[::-1], cmap='gray', vmin=0.0, vmax=1.0)
-        plt.savefig('obs_map_hits.png')
+        return mask
 
-        print((probs[mask] > 0.5).sum())
+    def check_collision(self, trajectory: list[TrajectoryPoint]):
+        probs = self.probs()
+        mask = self.generate_collision_mask(trajectory, probs)
+        # robs = np.zeros_like(probs)
+        # robs[mask & (probs > 0.5)] = 1
+        # robs = robs[::-1]
+        # plt.cla()
+        # plt.imshow(robs, cmap='gray', vmin=0, vmax=1)
+        # plt.savefig('obs_map2.png')
+
+        # robs = np.zeros_like(probs)
+        # robs[mask | (probs > 0.5)] = 1
+        # robs = robs[::-1]
+        # plt.cla()
+        # plt.imshow(robs, cmap='gray', vmin=0, vmax=1)
+        # plt.savefig('obs_map3.png')
+
         return np.any(probs[mask] > 0.5)
-
-
-        # for wp in trajectory:
-        #     cx = wp.x + BUBBLE_DIST * np.cos(wp.angle)
-        #     cy = wp.y + BUBBLE_DIST * np.sin(wp.angle)
-        #     xs = []
-        #     ys = []
-
-        #     for x in range(int((cx - self.min_x - BUBBLE_R) / 0.25), int((cx - self.min_x + BUBBLE_R) / 0.25) + 1):
-        #         for y in range(int((cy - self.min_y - BUBBLE_R) / 0.25), int((cy - self.min_y + BUBBLE_R) / 0.25) + 1):
-        #             if 0 <= x < len(self.obs) and 0 <= y < len(self.obs[0]) and probs[x][y] > 0.5:
-        #                 xs.append(x * 0.25 + self.min_x)
-        #                 ys.append(y * 0.25 + self.min_y)
-
-        #     if not xs:
-        #         continue
-
-        #     if not rectangle_check(wp.x, wp.y, wp.angle, xs, ys):
-        #         return True
-
-        # return False
 
 def refine_trajectory(trajectory: list[TrajectoryPoint]):
     if len(trajectory) == 0: return
@@ -211,10 +171,10 @@ def plan_hybrid_a_star(cur: TrajectoryPoint, destination: TrajectoryPoint, obs: 
     # run planner
     start = np.array([cur.x - obs.min_x, cur.y - obs.min_y, cur.angle])
     end = np.array([destination.x - obs.min_x, destination.y - obs.min_y, destination.angle])
-    local_min_x = min(cur.x, destination.x) - 8
-    local_max_x = max(cur.x, destination.x) + 8
-    local_min_y = min(cur.y, destination.y) - 8
-    local_max_y = max(cur.y, destination.y) + 8
+    local_min_x = min(cur.x, destination.x) - 6
+    local_max_x = max(cur.x, destination.x) + 6
+    local_min_y = min(cur.y, destination.y) - 6
+    local_max_y = max(cur.y, destination.y) + 6
     local_min_x, local_min_y = obs.transform_coord(local_min_x, local_min_y)
     local_max_x, local_max_y = obs.transform_coord(local_max_x, local_max_y)
     ox = []
@@ -304,21 +264,6 @@ class CarlaCameraSensor():
                     max_angle=max_angle, camera_type='sensor.camera.rgb'
                 )
 
-                # cam_bp = world.get_blueprint_library().find('sensor.camera.rgb')
-                # cam_bp.set_attribute('image_size_x', str(cam_config['image_width']))
-                # cam_bp.set_attribute('image_size_y', str(cam_config['image_height']))
-                # fov = 2 * np.arctan(cam_config['image_width'] / (2 * cam_config['intrinsic']['fx'])) * 180 / np.pi
-                # cam_bp.set_attribute('fov', str(fov))
-
-                # rotation = Rotation.from_matrix(cam_config['rotation'])
-                # pitch, yaw, roll = rotation.as_euler('YZX', degrees=True)
-                # rotation = carla.Rotation(pitch, yaw, roll)
-
-                # translation = cam_config['translation']
-                # location = carla.Location(translation[0], translation[1], translation[2])
-
-                # transform = carla.Transform(location, rotation)
-                # cam = world.spawn_actor(cam_bp, transform, attach_to=actor, attachment_type=carla.AttachmentType.Rigid)
                 self.cameras[cam_name] = cam
 
     def get_images(self):
@@ -332,107 +277,42 @@ class CarlaCameraSensor():
         for cam in self.cameras.values():
             cam.destroy()
 
+class CarlaCollisionSensor():
+    def __init__(self, actor, world):
+        self.has_collided = False
+        # collision_bp = world.get_blueprint_library().find('sensor.other.collision')
+        # sensor = world.spawn_actor(collision_bp, carla.Transform(), attach_to=actor)
+        # sensor.listen(self.on_collision)
+
+    def on_collision(self):
+        print('collision')
+        self.has_collided = True
+
 class CarlaCar():
     def __init__(self, world, blueprint, spawn_point, destination, destination_bb, debug=False):
         self.world = world
         self.actor = world.spawn_actor(blueprint, spawn_point)
         self.gnss_sensor = CarlaGnssSensor(self.actor)
         self.camera_sensor = CarlaCameraSensor(self.actor, world)
-        self.car = Car((destination.x, destination.y), self.gnss_sensor, self.camera_sensor)
+        self.collision_sensor = CarlaCollisionSensor(self.actor, world)
+        self.car = Car((destination.x, destination.y), self.gnss_sensor, self.camera_sensor, self.collision_sensor)
         self.destination_bb = destination_bb
-        self.recording_file = None
-        self.has_recorded_segment = False
-        self.frames = Queue()
 
         self.debug = debug
         if debug:
             self.debug_init(spawn_point, destination)
 
+    def calculate_critical_time(self): return self.car.calculate_critical_time()
     def localize(self): self.car.localize()
-    def perceive(self): self.car.perceive()
+    def perceive(self, cur_x, cur_y, cur_angle, imgs): return self.car.perceive(cur_x, cur_y, cur_angle, imgs)
     def plan(self): self.car.plan()
+    def fail(self): self.car.fail()
 
     def run_step(self):
         self.actor.apply_control(self.car.control())
         if self.debug:
             self.debug_step()
         
-    def init_recording(self, recording_file):
-        self.recording_file = recording_file
-        world = self.world
-        actor = self.actor
-        cam_bp = world.get_blueprint_library().find('sensor.camera.rgb')
-        cam_bp.set_attribute('image_size_x', str(1080))
-        cam_bp.set_attribute('image_size_y', str(720))
-        cam_bp.set_attribute('fov', str(90))
-        cam_location = actor.get_transform().transform(carla.Location(x=-10, z=5))
-        cam_rotation = actor.get_transform().rotation
-        cam_rotation.pitch -= 20
-        cam_transform = carla.Transform(cam_location, cam_rotation)
-        cam = world.spawn_actor(cam_bp, cam_transform, attach_to=actor, attachment_type=carla.AttachmentType.Rigid)
-        cam.listen(lambda image: self.frames.put(image))
-        # for cam_name in self.camera_frames:
-        #     self.camera_sensor.cameras[cam_name].listen(lambda image, cam_name=cam_name: self.camera_frames[cam_name].put(image))
-
-        return cam
-    
-    def process_recording_frames(self, latency=None):
-        while not self.frames.empty():
-            if self.has_recorded_segment and self.car.mode == Mode.PARKED:
-                return
-            image = self.frames.get()
-            camera_images = self.camera_sensor.get_images()
-            self.has_recorded_segment = False
-            recording_file = self.recording_file
-
-            data = np.frombuffer(image.raw_data, dtype=np.uint8).reshape((image.height, image.width, 4))
-            data = data[:, :, :3].copy()
-            data = data[:, :, ::-1]
-            cams_data = np.zeros((180, image.width, 3))
-
-            for cam_index, cam_name in enumerate(camera_images):
-                cam_data = camera_images[cam_name].copy()
-                # if cam_name == 'rgb_left':
-                #     cam_data = cv2.flip(cam_data, 0)
-                cam_data = cv2.resize(cam_data, (int(image.width / 4), int(image.height / 4)))
-                cams_data[:cam_data.shape[0], (cam_index * cam_data.shape[1]):((cam_index + 1) * cam_data.shape[1])] = cam_data
-            
-            data = np.concatenate((data, cams_data), axis=0)
-
-            data = cv2.putText(
-                data,
-                "autonomous, 3x speed",
-                (20, image.height - 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                fontScale=1,
-                color=(255, 255, 255),
-                thickness=2
-            )
-            data = cv2.putText(
-                data,
-                "IOU: {:.2f}".format(self.iou()),
-                (image.width - 175, image.height - 40),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                fontScale=1,
-                color=(255, 255, 255),
-                thickness=2
-            )
-            if latency:
-                data = cv2.putText(
-                    data,
-                    "latency: {}ms".format(latency) if latency else "",
-                    (image.width - 275, image.height - 80),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    fontScale=1,
-                    color=(255, 255, 255),
-                    thickness=2
-                )
-            recording_file.write_frame(data, pixel_format='rgb24')
-            if self.car.mode == Mode.PARKED:
-                self.has_recorded_segment = True
-                for _ in range(15):
-                    recording_file.write_frame(data, pixel_format='rgb24')
-    
     def debug_init(self, spawn_point, destination):
         self.world.debug.draw_string(spawn_point.location, 'start', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
         self.world.debug.draw_string(destination, 'end', draw_shadow=False, color=carla.Color(r=255, g=0, b=0), life_time=120.0, persistent_lines=True)
@@ -488,55 +368,75 @@ class CarlaCar():
         return iou
 
 class Car():
-    def __init__(self, destination: Tuple[float, float], gnss_sensor: CarlaGnssSensor, camera_sensor: CarlaCameraSensor):
+    def __init__(self, destination: Tuple[float, float], gnss_sensor: CarlaGnssSensor, camera_sensor: CarlaCameraSensor, collision_sensor: CarlaCollisionSensor):
         self.cur = TrajectoryPoint(Direction.FORWARD, 0, 0, 0, 0)
+        self.stagnation_history = []
+        self.failure_history = []
         self.obs: ObstacleMap = []
         self.destination = TrajectoryPoint(Direction.FORWARD, destination[0], destination[1], MIN_SPEED, 0).offset(-1)
         self.controller = VehiclePIDController({'K_P': 2, 'K_I': 0.05, 'K_D': 0.2, 'dt': 0.05}, {'K_P': 0.5, 'K_I': 0.05, 'K_D': 0.0, 'dt': 0.05})
         self.gnss_sensor = gnss_sensor
         self.camera_sensor = camera_sensor
+        self.collision_sensor = collision_sensor
         self.trajectory: list[TrajectoryPoint] = []
         self.ti = 0
         self.mode = Mode.DRIVING
+    
+    def calculate_critical_time(self):
+        probs = self.obs.probs()
+        collision_mask = self.obs.generate_collision_mask(self.trajectory[self.ti:], probs)
+        cur_x = self.cur.x
+        cur_y = self.cur.y
+        inner_radius = 3
+        inner_mask = self.obs.circular_mask(cur_x, cur_y, inner_radius)
+        uncertain_coords = self.obs.inverse_transform_coords(np.argwhere(collision_mask & ~inner_mask & (0.4 <= probs) & (probs <= 0.6)))
+        # recording_obs = np.zeros_like(probs)
+        # recording_obs[collision_mask & ~inner_mask & (0.4 <= probs) & (probs <= 0.6)] = 1
+        # recording_obs = recording_obs[::-1]
+        # plt.cla()
+        # plt.imshow(recording_obs, cmap='gray', vmin=0, vmax=1)
+        # plt.savefig('obs_map2.png')
+        if len(uncertain_coords) == 0:
+            return float('inf')
+        min_distance_to_uncertain = np.min(np.linalg.norm(uncertain_coords - np.array([cur_x, cur_y]), axis=1))
+        time_to_uncertain = (min_distance_to_uncertain + inner_radius) / self.cur.speed
+        stopping_time = self.cur.speed / MAX_ACCELERATION
+        return time_to_uncertain - stopping_time
 
     def localize(self):
+        point = np.array([self.cur.x, self.cur.y])
+        self.stagnation_history.append(point)
+        self.failure_history.append(point)
+        if len(self.stagnation_history) > STAGNATION_HISTORY_LENGTH:
+            self.stagnation_history.pop(0)
+        if len(self.failure_history) > FAILURE_HISTORY_LENGTH:
+            self.failure_history.pop(0)
         self.cur.x, self.cur.y = self.gnss_sensor.get_location()
         self.cur.speed = self.gnss_sensor.get_speed()
         self.cur.angle = self.gnss_sensor.get_heading()
         self.cur = self.cur.offset(-1)
 
-    def perceive(self):
-        imgs = self.camera_sensor.get_images()
-        # check if any are nonzero
-        if np.nonzero(imgs['rgb_front'])[0].size == 0:
-            return
-        # print('used: ', self.cur.x, self.cur.y)
-        cur_offset = self.cur
-        cur_x = cur_offset.x
-        cur_y = cur_offset.y
-        cur_angle = cur_offset.angle
-        # cur_x = actual.location.x
-        # cur_y = actual.location.y
-        # cur_angle = np.deg2rad(actual.rotation.yaw)
-        occ = run_perception_model(cur_x, -cur_y, -cur_angle, [
+    def perceive(self, cur_x, cur_y, cur_angle, imgs):
+        if self.collision_sensor.has_collided:
+            self.mode = Mode.FAILED
+            return None, None
+        if any(img is None for img in imgs.values()):
+            return None, None
+        imgnps = [
             imgs['rgb_front'],
             imgs['rgb_left'],
             imgs['rgb_rear'],
             imgs['rgb_right']
-        ])
+        ]
+        occ = run_perception_model(cur_x, -cur_y, -cur_angle, imgnps)
         if occ is not None:
             updates = np.zeros_like(self.obs.obs)
-            occluded = np.zeros_like(self.obs.obs, dtype=bool)
-            # cur_x_min, cur_y_min = self.obs.transform_coord(self.cur.x - 8, self.cur.y - 8)
-            # cur_x_max, cur_y_max = self.obs.transform_coord(self.cur.x + 8, self.cur.y + 8)
-            # cur_x_min = max(0, cur_x_min)
-            # cur_y_min = max(0, cur_y_min)
-            # cur_x_max = min(len(self.obs.obs), cur_x_max)
-            # cur_y_max = min(len(self.obs.obs[0]), cur_y_max)
+            # occluded = np.zeros_like(self.obs.obs, dtype=bool)
             radius = 9
+            inner_radius = 3
             mask = self.obs.circular_mask(cur_x, cur_y, radius)
-            # updates[mask] = np.log(0.45 / (1 - 0.45))
-            # updates[mask] = 0
+            inner_mask = self.obs.circular_mask(cur_x, cur_y, inner_radius)
+            mask &= ~inner_mask
             for point in occ:
                 reflected_point = np.array([point[0], -point[1]])
                 rotation_matrix = np.array([
@@ -549,32 +449,36 @@ class Car():
                 absolute_point = rotated_point + np.array([cur_x, cur_y])
                 x, y = self.obs.transform_coord(absolute_point[0], absolute_point[1])
                 if 0 <= x < len(updates) and 0 <= y < len(updates[0]):
-                    updates[x][y] += np.log(0.65 / (1 - 0.65))
+                    if point[-1] == 9: # vehicle
+                        updates[x][y] += np.log(0.53 / (1 - 0.53))
+                    else:
+                        updates[x][y] += np.log(0.53 / (1 - 0.53))
                     # dir_vec = rotated_point / np.linalg.norm(rotated_point)
-                    # for dist in range(1, radius*4):
-                    #     dist = dist / 4
-                    #     occluded_x, occluded_y = self.obs.transform_coord(absolute_point[0] + dist * dir_vec[0], absolute_point[1] + dist * dir_vec[1])
-                    #     if 0 <= occluded_x < len(updates) and 0 <= occluded_y < len(updates[0]):
-                    #         occluded[occluded_x][occluded_y] = True
-                    # updates[x][y] = np.log(0.85 / (1 - 0.85))
-                    # if point[-1] == 1:
-                    #     updates[x][y] += np.log(0.45 / (1 - 0.45))
-                    # elif point[-1] == 9:
-                    #     updates[x][y] += np.log(0.55 / (1 - 0.55))
+                    # for dist in range(0, radius*4):
+                    #     occ_x, occ_y = self.obs.transform_coord(
+                    #         absolute_point[0] + dir_vec[0] * dist / 4,
+                    #         absolute_point[1] + dir_vec[1] * dist / 4
+                    #     )
+                    #     if 0 <= occ_x < len(occluded) and 0 <= occ_y < len(occluded[0]):
+                    #         occluded[occ_x][occ_y] = True
+                    # # padding
+                    # for i in range(-1, 2):
+                    #     for j in range(-1, 2):
+                    #         if 0 <= x + i < len(updates) and 0 <= y + j < len(updates[0]):
+                    #             updates[x+i][y+j] += np.log(0.55 / (1 - 0.55))
             # updates *= 0.5
             # updates = np.clip(updates, 0, 1)
-            # updates[mask & occluded] *= 0.1
             # updates[mask & ~occluded] = np.log(0.45 / (1 - 0.45))
             for x, y in zip(*np.where(mask)):
                 cell_point = np.array(self.obs.inverse_transform_coord(x, y)) - np.array([cur_x, cur_y])
                 distance = np.linalg.norm(cell_point)
-                distance_weight = 1 - (distance / radius)
+                distance_weight = max(0, 1 - (distance / radius))
                 if updates[x][y] == 0:
                     updates[x][y] = np.log(0.45 / (1 - 0.45))
                 updates[x][y] *= distance_weight
             self.obs.obs += updates
-            # self.obs.obs = updates
-            # self.obs.obs = np.clip(self.obs.obs, -5, 10)
+            # self.obs.obs = np.maximum(-5, self.obs.obs)
+        return imgnps, occ
 
     def plan(self):
         cur = self.cur
@@ -585,8 +489,17 @@ class Car():
         should_extend = len(trajectory) == 0
         should_fix = len(trajectory) > 0 and cur.distance(trajectory[self.ti]) > REPLAN_THRESHOLD
         has_collision = self.obs.check_collision(trajectory[self.ti:])
+        has_stagnated = len(self.stagnation_history) == STAGNATION_HISTORY_LENGTH and np.linalg.norm(np.mean(self.stagnation_history, axis=0) - np.array([cur.x, cur.y])) < STAGNATION_THRESHOLD
+        has_failed = len(self.failure_history) == FAILURE_HISTORY_LENGTH and np.linalg.norm(np.mean(self.failure_history, axis=0) - np.array([cur.x, cur.y])) < FAILURE_THRESHOLD
 
-        if should_extend or should_fix or has_collision:
+        if has_failed:
+            self.ti = 0
+            self.trajectory = []
+            self.mode = Mode.FAILED
+            return
+
+        if should_extend or should_fix or has_collision or has_stagnated:
+            if has_stagnated: print('stagnated')
             new_trajectory = plan_hybrid_a_star(cur, destination, self.obs)
 
             if not new_trajectory:
@@ -599,11 +512,12 @@ class Car():
                     new_trajectory.append(destination.offset(i/3))
                 self.ti = 1
                 trajectory = self.trajectory = new_trajectory
+                self.stagnation_history = []
             else:
                 self.obs.obs[1:-1, 1:-1] = 0
+                self.ti = 0
+                self.trajectory = []
                 self.plan()
-                # self.ti = 0
-                # self.trajectory = []
                 # self.mode = Mode.FAILED
         
         # decay all obstacles except the edges
@@ -659,3 +573,8 @@ class Car():
         self.perceive()
         self.plan()
         return self.control()
+
+    def fail(self):
+        self.ti = 0
+        self.trajectory = []
+        self.mode = Mode.FAILED

@@ -10,24 +10,29 @@ from v2_experiment_utils import (
     update_walkers,
     obstacle_map_from_bbs,
     clear_obstacle_map,
-    union_obstacle_map,
-    mask_obstacle_map,
     clear_destination_obstacle_map,
-    cleanup,
-    DELTA_SECONDS
+    init_third_person_camera,
+    ms_to_ticks
 )
 
+from v2_visualization import (
+    Visualizer
+)
+
+from enum import Enum
 import numpy as np
 import matplotlib.pyplot as plt
-import imageio.v3 as iio
+import pickle
+import random
+import cv2
 
 SCENARIOS = [
     # (17, [16, 18]),
     # (18, [17, 19]),
     # (19, [18, 20]),
     (20, [19, 21]),
-    # (21, [20, 22]),
-    # (22, [21, 23]),
+    (21, [20, 22]),
+    (22, [21, 23]),
     # (23, [22, 24]),
     # (24, [23, 25]),
     # (25, [24, 26]),
@@ -55,10 +60,41 @@ SCENARIOS = [
     # (47, [46, 48]),
 ]
 NUM_RANDOM_CARS = 50
-PERCEPTION_LATENCIES = [100, 300] # ms
+NETWORK_SEND_LATENCIES = [0, 100, 200, 400] # ms
+PERCEPTION_LATENCY = 200 # ms
+SMALL_PERCEPTION_LATENCY = 100 # ms
+RECV_LATENCY = 100 # ms
+MODE_PERIOD = 500 # ms
+PLANNING_PERIOD = 500 # ms
+DATA_COLLECTION_PERIOD = 200 # ms
+SHOULD_PIPELINE = True
+SHOULD_ADJUST_MODEL = True
+TIMEOUT = 90 * 1000 # ms
 
-def run_scenario(world, destination_parking_spot, parked_spots, latency, ious, accelerations, recording_file):
+class Mode(Enum):
+    NORMAL = 1
+    ALTERNATE = 2 # latency compensation
+
+class EventType(Enum):
+    PERCEPTION = 1
+
+class Event:
+    def __init__(self, type: EventType, time: int, data):
+        self.type = type
+        self.time = time
+        self.data = data
+
+
+def run_scenario(client, destination_parking_spot, parked_spots, latency, ious, locations, accelerations, visualizer):
     try:
+        random.seed(9897105114)
+
+        # load map
+        world = town04_load(client)
+
+        # load spectator
+        town04_spectator_bev(world)
+
         # load parked cars
         parked_cars, parked_cars_bbs = town04_spawn_parked_cars(world, parked_spots, destination_parking_spot, NUM_RANDOM_CARS)
 
@@ -78,75 +114,102 @@ def run_scenario(world, destination_parking_spot, parked_spots, latency, ious, a
 
         # load car
         car = town04_spawn_ego_vehicle(world, destination_parking_spot)
-        recording_cam = car.init_recording(recording_file)
+
+        # load visualization data
+        recording_img = None
+        def set_recording_img(image):
+            nonlocal recording_img
+            data = np.frombuffer(image.raw_data, dtype=np.uint8).reshape((image.height, image.width, 4))
+            data = data[:, :, :3].copy()
+            data = data[:, :, ::-1]
+            recording_img = data
+        recording_cam = init_third_person_camera(world, car.actor)
+        recording_cam.listen(set_recording_img)
+        recording_imgnps = None
+        recording_occ = None
+        recording_obs = None
 
         # HACK: enable perfect perception of parked cars
         car.car.obs = clear_obstacle_map(obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + walker_bbs))
-        # visualize 1 hot map
-        plt.cla()
-        plt.imshow(car.car.obs.obs, cmap='gray')
-        plt.savefig('obs_map.png')
+
+        # tick world to load car and cameras
+        world.tick()
 
         # run simulation
         i = 0
-        perception_req = None
-        perception_res = None
-        world.tick()
+        events = []
+        recv_latency = 0 if latency == 0 else RECV_LATENCY
+        perception_delay = ms_to_ticks(latency + PERCEPTION_LATENCY + recv_latency)
+        perception_period = ms_to_ticks(max(latency, PERCEPTION_LATENCY, recv_latency)) if SHOULD_PIPELINE else perception_delay
+        small_perception_delay = ms_to_ticks(latency*0.5 + SMALL_PERCEPTION_LATENCY + recv_latency)
+        small_perception_period = ms_to_ticks(max(latency*0.5, SMALL_PERCEPTION_LATENCY, recv_latency)) if SHOULD_PIPELINE else small_perception_delay
+        mode = Mode.NORMAL
+        # timeline_diagram = TimelineDiagram()
         while not is_done(car):
             walker_bbs = update_walkers(walkers)
             world.tick()
             car.localize()
-            accelerations.append(car.actor.get_acceleration().length())
-            if latency == 0:
-                car.perceive()
-                car.car.obs = union_obstacle_map(
-                    car.car.obs,
-                    mask_obstacle_map(
-                        obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + walker_bbs),
-                        car.car.cur.x,
-                        car.car.cur.y
-                    ),
-                )
-            elif i % int(latency / 1000 / DELTA_SECONDS) == 0:
-                # car.car.obs = clear_obstacle_map(car.car.obs)
-                # print('perception snp: ', world.get_snapshot().find(car.actor.id).get_transform().location)
-                # print('perception cur: ', car.actor.get_transform().location)
-                # print('perception cur: ', world.get_snapshot().timestamp.elapsed_seconds)
-                # car.car.perceive(world.get_snapshot().find(car.actor.id).get_transform())
-                car.perceive()
-                car.car.obs.obs[75, :] = 999
-                car.car.obs.obs[140, :] = 999
-                car.car.obs.obs[:, 140] = 999
-                clear_destination_obstacle_map(car.car.obs, destination_parking_spot)
-                # TEMP: perfect perception for now
-                # car.car.obs.obs[np.where(obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + walker_bbs).obs == 1)] = 999
-                cpy = car.car.obs.probs().copy()
-                cpy[np.where(obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + walker_bbs).obs == 1)] = 1
-                plt.cla()
-                plt.imshow(cpy[::-1], cmap='gray', vmin=0.0, vmax=1.0)
-                plt.savefig('obs_map.png')
 
-                # # process perception response on the car
-                # if perception_res: car.car.obs = perception_res
+            if i % ms_to_ticks(DATA_COLLECTION_PERIOD) == 0:
+                location = car.actor.get_location()
+                locations.append(np.array([location.x, location.y]))
 
-                # # process perception request on server
-                # if perception_req:
-                #     perception_res = union_obstacle_map(
-                #         car.car.obs,
-                #         mask_obstacle_map(
-                #             obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + walker_bbs),
-                #             perception_req.x,
-                #             perception_req.y
-                #         ),
-                #     )
+                acceleration = car.actor.get_acceleration()
+                accelerations.append(np.array([acceleration.x, acceleration.y]))
 
-                # send next request
-                perception_req = car.car.cur
+            if SHOULD_ADJUST_MODEL and i % ms_to_ticks(MODE_PERIOD) == 0:
+                critical_time = car.calculate_critical_time()
+                risk_normal = 1 - (1 if critical_time * 1000 > latency + PERCEPTION_LATENCY + recv_latency else 0) * 0.95
+                risk_alternate = 1 - (1 if critical_time * 1000 > latency*0.5 + SMALL_PERCEPTION_LATENCY + recv_latency else 0) * 0.85
+                prev_mode = mode
 
-            if i % 5 == 0:
+                if risk_normal < risk_alternate:
+                    mode = Mode.NORMAL
+                else:
+                    mode = Mode.ALTERNATE
+
+                if mode != prev_mode:
+                    print(f'switching mode: {prev_mode} -> {mode}')
+
+            # print(critical_time * 1000, latency + PERCEPTION_LATENCY + recv_latency)
+            # print(f'risk_normal: {risk_normal}, risk_alternate: {risk_alternate}')
+            # print()
+
+            if i % (perception_period if mode == Mode.NORMAL else small_perception_period) == 0:
+                imgs = car.car.camera_sensor.get_images()
+                if mode == Mode.ALTERNATE:
+                    for img_name in imgs:
+                        img = imgs[img_name]
+                        if img is None: break
+                        img_shape = img.shape
+                        imgs[img_name] = cv2.resize(img, (img.shape[1]//2, img.shape[0]//2))
+                        imgs[img_name] = cv2.resize(img, (img_shape[1], img_shape[0]))
+
+                cur = car.car.cur
+                # timeline_diagram.add_send(i, latency)
+                # timeline_diagram.add_runtime(i + latency, PERCEPTION_LATENCY)
+                # timeline_diagram.add_recv(i + latency + PERCEPTION_LATENCY, recv_latency)
+                events.append(Event(EventType.PERCEPTION, i + (perception_delay if mode == Mode.NORMAL else small_perception_delay), (cur.x, cur.y, cur.angle, imgs)))
+
+            for event in events:
+                if i != event.time: continue
+                if event.type == EventType.PERCEPTION:
+                    cur_x, cur_y, cur_angle, imgs = event.data
+                    recording_imgnps, recording_occ = car.perceive(cur_x, cur_y, cur_angle, imgs)
+                    clear_destination_obstacle_map(car.car.obs, destination_parking_spot)
+                    recording_obs = car.car.obs.probs().copy()
+                    recording_obs[np.where(obstacle_map_from_bbs(parked_cars_bbs + traffic_cone_bbs + walker_bbs).obs == 1)] = 1
+                    recording_obs = recording_obs[::-1]
+
+            if i % ms_to_ticks(PLANNING_PERIOD) == 0:
                 car.plan()
+
             car.run_step()
-            car.process_recording_frames(latency=latency)
+
+            if i > ms_to_ticks(TIMEOUT):
+                car.fail()
+
+            visualizer.send(recording_img, recording_imgnps, recording_occ, recording_obs, car.iou(), latency)
             i += 1
 
         iou = car.iou()
@@ -161,44 +224,43 @@ def run_scenario(world, destination_parking_spot, parked_spots, latency, ious, a
             traffic_cone.destroy()
         for walker in walkers:
             walker.destroy()
+        world.tick()
 
 def main():
     try:
         client = load_client()
 
-        # load map
-        world = town04_load(client)
-
-        # load spectator
-        town04_spectator_bev(world)
-
-        # load recording file
-        recording_file = iio.imopen('./test.mp4', 'w', plugin='pyav')
-        recording_file.init_video_stream('vp9', fps=30)
+        # load visualizer
+        visualizer = Visualizer()
 
         # run scenarios
         latency_data = []
-        for latency in PERCEPTION_LATENCIES:
+        for latency in NETWORK_SEND_LATENCIES:
             ious = []
-            accelerations = []
-            print(f'Running scenarios for latency: {latency}ms')
+            location_lists = []
+            acceleration_lists = []
+            print(f'running scenarios for latency: {latency}ms')
             for destination_parking_spot, parked_spots in SCENARIOS:
-                print(f'Running scenario: destination={destination_parking_spot}, parked_spots={parked_spots}')
-                run_scenario(world, destination_parking_spot, parked_spots, latency, ious, accelerations, recording_file)
-            latency_data.append((latency, ious, accelerations))
+                locations = []
+                accelerations = []
+                print(f'running scenario: destination={destination_parking_spot}, parked_spots={parked_spots}')
+                run_scenario(client, destination_parking_spot, parked_spots, latency, ious, locations, accelerations, visualizer)
+                location_lists.append(locations)
+                acceleration_lists.append(accelerations)
+            latency_data.append((latency, ious, location_lists, acceleration_lists))
             
         # scatter ious for each latency value
-        plt.clf()
-        for latency, ious, accelerations in latency_data:
-            jerks = np.diff(accelerations)
-            x_scatter = np.random.normal(loc=latency, scale=0.05, size=len(jerks))
-            plt.scatter(x_scatter, jerks, alpha=0.6, label=f'{latency}ms')
-        plt.title('Parking IOU Values')
-        plt.xticks(PERCEPTION_LATENCIES, [f'{latency}ms' for latency in PERCEPTION_LATENCIES])
-        plt.xlabel('Perception Latency')
-        plt.ylabel('IOU Value')
-        plt.grid(True, linestyle='--', alpha=0.5)
-        plt.savefig('iou_scatter.png')
+        # plt.clf()
+        # for latency, ious, accelerations in latency_data:
+        #     jerks = np.diff(accelerations)
+        #     x_scatter = np.random.normal(loc=latency, scale=0.05, size=len(jerks))
+        #     plt.scatter(x_scatter, jerks, alpha=0.6, label=f'{latency}ms')
+        # plt.title('Parking IOU Values')
+        # plt.xticks(NETWORK_SEND_LATENCIES, [f'{latency}ms' for latency in NETWORK_SEND_LATENCIES])
+        # plt.xlabel('Perception Latency')
+        # plt.ylabel('IOU Value')
+        # plt.grid(True, linestyle='--', alpha=0.5)
+        # plt.savefig('iou_scatter.png')
 
         # graph ious
         # plt.clf()
@@ -218,9 +280,9 @@ def main():
         print('stopping simulation')
     
     finally:
-        recording_file.close()
-        world.tick()
-        cleanup()
+        with open('experiment_data.pkl', 'wb') as f:
+            pickle.dump(latency_data, f)
+        visualizer.close()
 
 if __name__ == '__main__':
     main()
